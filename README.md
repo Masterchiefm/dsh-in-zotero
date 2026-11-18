@@ -1,6 +1,6 @@
 # dsh-in-zotero
 
-把 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 装进 [Zotero](https://www.zotero.org/)：在 Zotero 里直接使用 dsh 的原生会话界面、按文献绑定的阅读助手、划词流式翻译，以及「AI 重新获取元数据」。所有文库改动都通过 Zotero 自己的接口完成，绝不直接读写 `zotero.sqlite`。
+把 [DeepSeek Harness（dsh）](https://www.deepseek.com/harness/) 装进 [Zotero](https://www.zotero.org/)：在 Zotero 里直接使用 dsh 的原生会话界面、按文献绑定的阅读助手、划词流式翻译，以及「AI 重新获取元数据」。所有文库改动都通过 Zotero 自己的接口完成，绝不直接读写 `zotero.sqlite`。
 
 [![Latest Release](https://img.shields.io/github/v/release/Masterchiefm/dsh-in-zotero)](https://github.com/Masterchiefm/dsh-in-zotero/releases/latest)
 [![Build](https://github.com/Masterchiefm/dsh-in-zotero/actions/workflows/release.yml/badge.svg)](https://github.com/Masterchiefm/dsh-in-zotero/actions/workflows/release.yml)
@@ -9,7 +9,7 @@
 
 ### 推荐：让 dsh 的 AI 替你装
 
-1. 先下载安装 [dsh 官方桌面版](https://github.com/deepseek-ai/deepseek-harness)，完成登录与模型配置
+1. 先下载安装 [dsh 官方桌面版](https://www.deepseek.com/harness/)，完成登录与模型配置
 2. 在 dsh 里新建对话，粘贴下面这段提示词，agent 会自行完成下载与安装的全过程（网络不畅时它会自行尝试代理或加速镜像）：
 
    ```text
@@ -107,7 +107,7 @@ dsh 获得 21 个 `zotero_*` 工具：检索、读全文（真实路径）、改
 
 ## 快速上手
 
-1. **配置 dsh**：装了 [dsh 桌面版](https://github.com/deepseek-ai/deepseek-harness) 的话插件会自动检测（检测不到时在设置里手动指定安装目录）；没有桌面版就走内置运行时（首次使用自动 `npm install`，需 Node ≥ 24.9）
+1. **配置 dsh**：装了 [dsh 桌面版](https://www.deepseek.com/harness/) 的话插件会自动检测（检测不到时在设置里手动指定安装目录）；没有桌面版就走内置运行时（首次使用自动 `npm install`，需 Node ≥ 24.9）
 2. **开始对话**：点文献列表工具栏最右侧的 DSH 唤醒按钮，弹出 dsh 对话窗——像在 dsh 桌面版里一样对话，但它能直接看到你的 Zotero 文库
 3. **阅读时提问**：打开一篇 PDF，工具栏「外观」左边会出现唤醒按钮——这里每篇文献有自己的专属会话
 4. **划词翻译**：在 PDF 里划选文字，弹窗里点「译」（或打开「自动」开关直接流式翻译）
