@@ -1,0 +1,24 @@
+{
+  "name": "dsh-in-zotero-bridge",
+  "version": "0.1.2",
+  "description": "DeepSeek Harness bridge for Zotero: zotero_* agent tools over Zotero's own HTTP APIs, streaming translation, and session management for the dsh-in-zotero plugin.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=24.9"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

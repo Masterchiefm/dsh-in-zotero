@@ -1,0 +1,12 @@
+# Build artifacts
+*.xpi
+
+# Runtime installs (created by scripts/install-runtime.mjs)
+.dsh-runtime/
+
+# Logs
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

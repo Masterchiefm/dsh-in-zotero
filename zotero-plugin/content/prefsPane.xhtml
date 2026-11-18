@@ -1,0 +1,116 @@
+<!-- dsh-in-zotero settings pane — parsed as a XUL FRAGMENT with
+     defaultXUL:true (MozXULElement.parseXULToFragment). Never start this file
+     with a <?xml?> declaration: Zotero wraps the markup in its own wrapper
+     document, and a mid-document XML declaration makes the parse throw
+     "not well-formed XML" → an empty pane. Elements carrying a `preference`
+     attribute are synced automatically by Zotero; prefsPane.js (registered
+     via `scripts`) swaps the per-mode hint, toggles the conditional fields,
+     fills the detected source info, and wires the restart button. -->
+<vbox class="main-section">
+	<groupbox>
+		<label><html:h2>dsh 来源</html:h2></label>
+		<label class="dsh-hint" id="dsh-source-detected">正在检测本机 dsh 环境…</label>
+
+		<hbox align="center">
+			<label control="dsh-mode-menu" value="来源："/>
+			<menulist id="dsh-mode-menu" flex="1"
+				preference="extensions.zotero.dsh-in-zotero.dshMode">
+				<menupopup>
+					<menuitem value="auto" label="自动检测（推荐）"/>
+					<menuitem value="bundled" label="npm 内置运行时"/>
+					<menuitem value="attach" label="连接运行中的 dsh web"/>
+				</menupopup>
+			</menulist>
+		</hbox>
+		<label class="dsh-hint" id="dsh-mode-hint">…</label>
+
+		<vbox id="dsh-custom-box">
+			<hbox align="center">
+				<label control="dsh-custom-dir" value="本地 dsh 包目录（可选）："/>
+				<html:input id="dsh-custom-dir" type="text" style="flex: 1;"
+					preference="extensions.zotero.dsh-in-zotero.dshCustomDir"
+					placeholder="如 C:\Users\you\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh"/>
+			</hbox>
+			<label class="dsh-hint">自动模式下填写且目录内存在 lib\bin.js 时优先使用它；留空则依次使用 dsh 桌面版内核 → npm 内置运行时。目录失效时自动跳过。</label>
+		</vbox>
+
+		<vbox id="dsh-attach-box" hidden="true">
+			<hbox align="center">
+				<label control="dsh-attach-url" value="实例 URL："/>
+				<html:input id="dsh-attach-url" type="text" style="flex: 1;"
+					preference="extensions.zotero.dsh-in-zotero.attachUrl"
+					placeholder="http://127.0.0.1:端口/?token=…"/>
+			</hbox>
+			<label class="dsh-hint">不启动任何进程，接入一个正在运行的 dsh web 实例。从其浏览器地址栏复制完整地址（必须带 ?token=…；token 过期后重新复制）。</label>
+			<label class="dsh-hint" id="dsh-attach-plugin-path">桥插件文件位置：…</label>
+			<label class="dsh-hint">要获得翻译与文献工具：把上述目录里的 dsh-in-zotero-bridge 文件夹复制到目标实例 profile 的 node_modules\ 下，并在其 package.json 的 dsh.profile.bundles 数组加入 "dsh-in-zotero-bridge"，重启目标实例；仅对话则无需此步。</label>
+		</vbox>
+
+		<hbox id="dsh-node-box" align="center">
+			<label control="dsh-node-path" value="node.exe 路径（留空自动检测）："/>
+			<html:input id="dsh-node-path" type="text" style="flex: 1;"
+				preference="extensions.zotero.dsh-in-zotero.nodePath"
+				placeholder="C:\Program Files\nodejs\node.exe"/>
+		</hbox>
+		<label class="dsh-hint" id="dsh-node-hint">仅内置运行时与本地 dsh 包目录需要 Node ≥ 24.9；桌面版内核与连接模式无需。</label>
+
+		<vbox id="dsh-desktop-box">
+			<hbox align="center">
+				<label control="dsh-desktop-dir" value="桌面版安装目录（可选）："/>
+				<html:input id="dsh-desktop-dir" type="text" style="flex: 1;"
+					preference="extensions.zotero.dsh-in-zotero.desktopDir"
+					placeholder="如 C:\Users\you\AppData\Local\Programs\DeepSeek Harness"/>
+			</hbox>
+			<label class="dsh-hint">桌面版装在非默认位置或为便携版、自动检测不到时，在此手动指定（目录须含 DeepSeek Harness.exe）。留空走自动检测。</label>
+		</vbox>
+	</groupbox>
+
+	<groupbox>
+		<label><html:h2>卸载本插件安装的 dsh</html:h2></label>
+		<label class="dsh-hint" id="dsh-cleanup-status">正在检查可卸载的组件…</label>
+
+		<vbox id="dsh-cleanup-bundled-box" hidden="true">
+			<label class="dsh-hint" id="dsh-cleanup-bundled-path">npm 内置运行时：…</label>
+			<button id="dsh-cleanup-bundled" label="卸载 npm 内置运行时（释放磁盘空间）"/>
+			<label class="dsh-hint">删除插件通过 npm 安装的 @deepseek-ai/dsh 程序文件。装了 dsh 桌面版后它就不再被使用（自动检测优先桌面版内核）；卸载后来源自动切回「自动检测」。会话存档与模型配置在 ~/.dsh 中，不受影响。</label>
+		</vbox>
+
+		<vbox id="dsh-cleanup-custom-box" hidden="true">
+			<label class="dsh-hint" id="dsh-cleanup-custom-path">本地 dsh 包目录：…</label>
+			<checkbox id="dsh-cleanup-custom-confirm" label="我确认要永久删除上述目录（不可恢复）"/>
+			<button id="dsh-cleanup-custom" label="删除本地 dsh 包目录" disabled="true"/>
+			<label class="dsh-hint" id="dsh-cleanup-custom-hint">这是你自己指定的目录，插件不替你做主：勾选确认后才会删除。若路径含 node_modules（npm 安装），也可改用 npm uninstall -g @deepseek-ai/dsh。</label>
+		</vbox>
+	</groupbox>
+
+	<groupbox>
+		<label><html:h2>划词翻译</html:h2></label>
+		<vbox align="start">
+			<checkbox label="在阅读器划词弹窗中显示「译」按钮"
+				preference="extensions.zotero.dsh-in-zotero.translateEnabled"/>
+			<checkbox label="划选后自动翻译（需 dsh 已在后台运行）"
+				preference="extensions.zotero.dsh-in-zotero.translateAuto"/>
+			<checkbox label="使用深度思考模式翻译（若当前模型支持）"
+				preference="extensions.zotero.dsh-in-zotero.translateThinking"/>
+		</vbox>
+		<hbox align="center">
+			<label control="dsh-translate-model" value="翻译模型："/>
+			<menulist id="dsh-translate-model" flex="1" style="max-width: 420px;">
+				<menupopup id="dsh-translate-model-popup">
+					<menuitem value="" label="继承 dsh 当前使用的模型"/>
+				</menupopup>
+			</menulist>
+			<button id="dsh-translate-model-refresh" label="刷新列表"/>
+		</hbox>
+		<label class="dsh-hint" id="dsh-translate-model-hint">默认继承 dsh 当前使用的模型；点「刷新列表」（需 dsh 服务已启动）可加载 dsh 中已注册的全部模型后手动指定。</label>
+	</groupbox>
+
+	<groupbox>
+		<label><html:h2>应用更改</html:h2></label>
+		<checkbox label="每周自动检查更新（发现新版本时自动下载安装，GitHub 不可达时走 CDN 镜像）"
+			preference="extensions.zotero.dsh-in-zotero.autoUpdate"/>
+		<label class="dsh-hint">设置在改动时即时保存。点击按钮停止当前 dsh 服务并立即按新设置重启；重启期间可在上方查看进度。</label>
+		<button id="dsh-restart-button" label="保存设置并重启服务"/>
+		<label class="dsh-hint" id="dsh-restart-status" hidden="true"/>
+	</groupbox>
+</vbox>

@@ -1,0 +1,72 @@
+name: Release
+
+# Build the plugin on a version tag (v0.1.2), publish the .xpi as a GitHub
+# Release asset, and keep update.json on main pointing at the newest release
+# so Zotero's native addon updater finds updates.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Zero runtime dependencies — plain Node scripts, no npm install.
+      - name: Syntax check
+        run: node scripts/check.mjs
+
+      - name: Build plugin
+        run: node scripts/build-xpi.mjs
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          cp dsh-in-zotero.xpi "dsh-in-zotero-$VERSION.xpi"
+
+      # Zotero's native updater reads update.json from the repo's main branch.
+      # Append the new version to the updates list (keep old entries so older
+      # installs can still find their next hop).
+      - name: Update update.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const f = 'update.json';
+            const data = JSON.parse(fs.readFileSync(f, 'utf8'));
+            const addon = data.addons['dsh-in-zotero@dsh.local'] ??= { updates: [] };
+            const version = process.env.VERSION;
+            addon.updates = addon.updates.filter(u => u.version !== version);
+            addon.updates.push({
+              version,
+              update_link: 'https://github.com/${REPO}/releases/download/v' + version + '/dsh-in-zotero-' + version + '.xpi',
+            });
+            fs.writeFileSync(f, JSON.stringify(data, null, 2) + '\n');
+          "
+        env:
+          REPO: Masterchiefm/dsh-in-zotero
+
+      - name: Commit update.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          git commit -m "chore: update.json for v$VERSION [skip ci]" || echo "nothing to commit"
+          git push origin HEAD:main
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dsh-in-zotero-*.xpi
+          generate_release_notes: true

@@ -1,0 +1,208 @@
+/* dsh-in-zotero — session surface styles (main-window side): the floating
+ * panel, its drag strip + resize grip, and the full-tab variant. */
+
+#zotero-tb-dsh-open {
+	list-style-image: url('chrome://dsh-in-zotero/content/icons/icon.svg');
+	-moz-context-properties: fill;
+}
+
+/* --- floating panel --------------------------------------------------------- */
+
+.dsh-panel-host {
+	position: fixed;
+	z-index: 9999;
+	display: flex;
+}
+
+/* The UA sheet's [hidden]{display:none} loses to the author `display:flex`
+ * above (author origin wins) — hide explicitly when the attribute is set. */
+.dsh-panel-host[hidden] {
+	display: none;
+}
+
+.dsh-panel-host > .dsh-panel {
+	flex: 1;
+}
+
+.dsh-panel {
+	background: var(--material-toolbar);
+	border: 1px solid var(--fill-tertiary);
+	border-radius: 8px;
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.18);
+	overflow: hidden;
+}
+
+/* Collapsed: only the strip remains (height freed by sessionWindow.js). */
+.dsh-panel-host[data-collapsed="true"] .dsh-session-browser,
+.dsh-panel-host[data-collapsed="true"] .dsh-panel-grip {
+	display: none;
+}
+
+.dsh-panel-grip {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	z-index: 3;
+	width: 16px;
+	height: 16px;
+	cursor: nwse-resize;
+	background: linear-gradient(135deg, transparent 50%, var(--fill-quarternary) 50%);
+	border-bottom-right-radius: 8px;
+}
+
+/* 8-direction resize: the grip above is the SE corner; invisible handles cover
+ * every other edge/corner. A faint axis-colored hint on hover makes the
+ * affordance discoverable. */
+.dsh-panel-handle {
+	position: absolute;
+	z-index: 2;
+	background: transparent;
+}
+
+.dsh-panel-handle:hover {
+	background: var(--accent-blue);
+	opacity: 0.3;
+}
+
+.dsh-handle-n,
+.dsh-handle-s {
+	left: 10px;
+	right: 10px;
+	height: 6px;
+	cursor: ns-resize;
+}
+
+.dsh-handle-e,
+.dsh-handle-w {
+	top: 10px;
+	bottom: 10px;
+	width: 6px;
+	cursor: ew-resize;
+}
+
+.dsh-handle-n { top: 0; }
+.dsh-handle-s { bottom: 0; }
+.dsh-handle-e { right: 0; }
+.dsh-handle-w { left: 0; }
+
+.dsh-handle-ne,
+.dsh-handle-sw {
+	width: 16px;
+	height: 16px;
+	cursor: nesw-resize;
+}
+
+.dsh-handle-nw {
+	width: 16px;
+	height: 16px;
+	cursor: nwse-resize;
+}
+
+.dsh-handle-ne { top: 0; right: 0; }
+.dsh-handle-nw { top: 0; left: 0; }
+.dsh-handle-sw { bottom: 0; left: 0; }
+
+/* Collapsed panel: only horizontal resize applies (height is auto). */
+.dsh-panel-host[data-collapsed="true"] .dsh-handle-vert {
+	display: none;
+}
+
+/* --- shared strip (panel + tab) ----------------------------------------------- */
+
+.dsh-strip {
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--fill-quinary);
+	background: var(--material-toolbar);
+	min-height: 34px;
+}
+
+.dsh-panel .dsh-strip {
+	cursor: move;
+	border-bottom: none;
+}
+
+/* Interactive children opt out of the inherited drag cursor. */
+.dsh-strip toolbarbutton,
+.dsh-strip menulist {
+	cursor: pointer;
+}
+
+.dsh-strip-icon {
+	width: 18px;
+	height: 18px;
+	-moz-context-properties: fill;
+}
+
+.dsh-strip-title {
+	font-weight: 600;
+	margin: 0;
+}
+
+.dsh-strip-button {
+	margin: 0;
+	padding: 2px 7px;
+	min-height: 24px;
+}
+
+/* Panel icon buttons (标签页/折叠/关闭): matching blue SVG glyphs via
+ * list-style-image — the exact mechanism of the working toolbar icon
+ * (chrome:// SVG file, hard-coded colors). Data URIs and <image> children of
+ * toolbarbutton both fail here. */
+.dsh-panel .dsh-host-switch,
+.dsh-panel .dsh-collapse,
+.dsh-panel .dsh-close {
+	list-style-image: url('chrome://dsh-in-zotero/content/icons/maximize.svg');
+	padding: 2px 5px;
+}
+
+.dsh-panel .dsh-collapse {
+	list-style-image: url('chrome://dsh-in-zotero/content/icons/collapse.svg');
+}
+
+.dsh-panel .dsh-close {
+	list-style-image: url('chrome://dsh-in-zotero/content/icons/close.svg');
+}
+
+/* Tab strip: the back-to-panel button is icon-only (window-restore glyph) and
+ * appended last, so it sits alone at the strip's top-right corner. */
+.dsh-session-root .dsh-host-switch {
+	list-style-image: url('chrome://dsh-in-zotero/content/icons/restore.svg');
+	padding: 2px 5px;
+}
+
+.dsh-session-select {
+	flex: 1;
+	min-width: 120px;
+	max-width: 460px;
+}
+
+.dsh-panel .dsh-session-select {
+	max-width: none;
+}
+
+.dsh-strip-status {
+	color: var(--fill-secondary);
+	font-size: 12px;
+	margin: 0;
+	margin-inline-start: auto;
+}
+
+.dsh-panel .dsh-strip-status {
+	margin-inline-start: 4px;
+}
+
+/* --- full tab ------------------------------------------------------------------ */
+
+.dsh-session-root {
+	background: var(--material-toolbar);
+}
+
+.dsh-session-root .dsh-session-browser {
+	flex: 1;
+}
+
+.dsh-session-browser {
+	flex: 1;
+}

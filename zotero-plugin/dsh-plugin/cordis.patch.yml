@@ -1,0 +1,9 @@
+# dsh-in-zotero-bridge bundle patch.
+#
+# One insert row mounts the host half; the browser half is attached by the
+# package.json `dsh.client` declaration and binds to this row because its
+# `name` is the bare package name (same mechanism as dsh-zot-library).
+- insert:
+    - id: dsh-in-zotero-bridge
+      name: dsh-in-zotero-bridge
+      config: {}
