@@ -782,9 +782,73 @@ DSH.Sidecar = (() => {
 
 	// --- API clients -----------------------------------------------------------------
 
+	// --- auth cookie hygiene ----------------------------------------------------
+	//
+	// dsh mints a NEW `dsh-auth-<random>` cookie on EVERY token exchange (the
+	// name is not reused), and Zotero's cookie jar has no port dimension — so
+	// every cookie ever minted for ANY local dsh web (this plugin's sidecar,
+	// attach-mode targets, desktop app's web UI) rides along on every request
+	// to 127.0.0.1. After enough reconnects the Cookie header crosses the
+	// server's 16 KiB limit and dsh answers `431 Request Header Fields Too
+	// Large` — including /connect itself, so the plugin can never recover on
+	// its own. Prune stale dsh-auth cookies before the exchange, keep the jar
+	// bounded at one session, and the 431 cannot recur.
+
+	/** Enumerate cookies for a host across Gecko's two API shapes. */
+	function hostCookies(host) {
+		const jar = Services.cookies;
+		let list;
+		try { list = jar.getCookiesFromHost(host, {}); }
+		catch (e) { list = jar.getCookiesFromHost(host); }
+		const out = [];
+		if (!list) return out;
+		if (typeof list.hasMoreElements === 'function') {
+			while (list.hasMoreElements()) out.push(list.getNext());
+		}
+		else {
+			for (const c of list) out.push(c);
+		}
+		return out;
+	}
+
+	/** Drop every dsh-auth cookie. dsh names them `dsh-auth-<random id>` — a
+	 * fresh id per exchange, not the launch token — and /connect always mints
+	 * a new one, so there is no "current" cookie worth keeping. Call BEFORE
+	 * /connect: the exchange request itself carries the (bloated) jar and
+	 * would 431 otherwise. */
+	function pruneAuthCookies() {
+		let host = '';
+		try { host = new URL(state.apiBase).hostname; }
+		catch (e) { return 0; }
+		if (!host) return 0;
+		let removed = 0;
+		for (const cookie of hostCookies(host)) {
+			const name = String(cookie?.name ?? '');
+			if (!name.startsWith('dsh-auth-')) continue;
+			try {
+				Services.cookies.remove(cookie.host, name, cookie.path, false);
+				removed++;
+			}
+			catch (e) {
+				try {
+					Services.cookies.remove(cookie.host, name, cookie.path, false, cookie.originAttributes);
+					removed++;
+				}
+				catch (e2) {
+					log(`dsh-auth cookie remove failed: ${name.slice(0, 18)}…`, e2?.message ?? e2);
+				}
+			}
+		}
+		if (removed) log(`pruned ${removed} stale dsh-auth cookie(s) for ${host}`);
+		return removed;
+	}
+
 	/** Exchange the launch token for the API cookie (stored in the cookie jar). */
 	async function connectAuth() {
 		if (!state.apiBase || !state.token) throw new Error('sidecar 尚未就绪');
+		// The jar may already be at the 16 KiB limit from earlier runs — prune
+		// BEFORE sending /connect, otherwise the exchange request itself 431s.
+		pruneAuthCookies();
 		const url = `${state.apiBase}/connect?token=${encodeURIComponent(state.token)}&interactions=none`;
 		try {
 			await DSH.Util.xhr(url, { method: 'GET', timeoutMs: 15000 });
@@ -806,7 +870,9 @@ DSH.Sidecar = (() => {
 			timeoutMs,
 		});
 		let { status, text } = await attempt();
-		if (status === 401) {
+		if (status === 401 || status === 431) {
+			// 431 = cookie jar overflowed again (e.g. a second local dsh minted
+			// cookies meanwhile); 401 = expired. Both recover via re-exchange.
 			await connectAuth();
 			({ status, text } = await attempt());
 		}
@@ -836,7 +902,9 @@ DSH.Sidecar = (() => {
 			timeoutMs,
 		});
 		let { status, text } = await attempt();
-		if (status === 401) {
+		if (status === 401 || status === 431) {
+			// Startup probe / live calls: recover from an expired session or a
+			// cookie-jar overflow the same way (prune + fresh /connect).
 			await connectAuth();
 			({ status, text } = await attempt());
 		}
@@ -887,7 +955,7 @@ DSH.Sidecar = (() => {
 						catch (e) { log('bad NDJSON line', line.slice(0, 120)); }
 					}
 				};
-				controller.xhr = await DSH.Util.xhr(`${state.apiBase}/api/zotero/translate`, {
+				const request = () => DSH.Util.xhr(`${state.apiBase}/api/zotero/translate`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
@@ -898,6 +966,17 @@ DSH.Sidecar = (() => {
 					timeoutMs: 180000,
 					onProgress: handle,
 				});
+				controller.xhr = await request();
+				if (!controller.stopped && (controller.xhr.status === 401 || controller.xhr.status === 431)) {
+					// Expired session, or the cookie jar bloated again between
+					// calls: prune + re-exchange, then restart the stream with a
+					// fresh NDJSON consumer so no line is replayed.
+					log(`translateStream HTTP ${controller.xhr.status} — re-auth and retry once`);
+					await connectAuth();
+					consumed = 0;
+					buffer = '';
+					controller.xhr = await request();
+				}
 				// Final flush (progress may miss the tail without newlines).
 				handle(controller.xhr.text);
 				if (controller.xhr.status !== 200) {
@@ -1157,7 +1236,7 @@ DSH.Sidecar = (() => {
 		});
 		try {
 			let { status, text } = await attempt();
-			if (status === 401) {
+			if (status === 401 || status === 431) {
 				await connectAuth();
 				({ status, text } = await attempt());
 			}
