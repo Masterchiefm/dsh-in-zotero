@@ -1,7 +1,12 @@
 {
   "addons": {
     "dsh-in-zotero@dsh.local": {
-      "updates": []
+      "updates": [
+        {
+          "version": "0.1.2",
+          "update_link": "https://github.com/Masterchiefm/dsh-in-zotero/releases/download/v0.1.2/dsh-in-zotero-0.1.2.xpi"
+        }
+      ]
     }
   }
 }
