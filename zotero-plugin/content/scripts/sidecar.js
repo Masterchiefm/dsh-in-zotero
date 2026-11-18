@@ -328,11 +328,13 @@ DSH.Sidecar = (() => {
 
 	// --- runtime install ----------------------------------------------------------
 
-	async function ensureRuntime(onStatus) {
-		if (await DSH.Util.pathExists(dshBinJs())) return;
+	async function ensureRuntime(onStatus, manual = false) {
+		if (await DSH.Util.pathExists(dshBinJsFor('bundled'))) return;
 		const node = await nodePath();
 		onStatus?.('首次运行：正在安装 dsh 运行时，约 1-3 分钟…');
-		setPhase('installing');
+		// A manual install from the settings pane must not clobber the phase of
+		// an already-running sidecar (only the cold-start path owns that flag).
+		if (!manual) setPhase('installing');
 		const version = String(prefGet('dshPackageVersion', '') || 'latest');
 		const args = ['install', '--no-audit', '--no-fund', '--loglevel=error',
 			`@deepseek-ai/dsh@${version}`, '--prefix', runtimeDir()];
@@ -487,10 +489,13 @@ DSH.Sidecar = (() => {
 			ok = Services.prompt.select(win, title, text, choices, selected);
 		}
 		catch (e) {
-			ok = Services.prompt.select(win, title, text, choices.length, choices, selected);
+			// Legacy builds that still expose the size_is count: signature is
+			// (parent, title, text, list, count, outSelection) — list BEFORE count.
+			ok = Services.prompt.select(win, title, text, choices, choices.length, selected);
 		}
+		const pick = Number(selected.value);
+		log(`source choice: ok=${ok} pick=${pick}`);
 		if (!ok) return null;
-		const pick = selected.value;
 		if (pick === 0) return pickDesktopDir(win);
 		if (pick === 1) {
 			DSH.Util.prefSet('dshMode', 'bundled');
@@ -505,27 +510,55 @@ DSH.Sidecar = (() => {
 		return pickCustomDir(win);
 	}
 
+	/** Open a folder picker, resolving to the chosen path (or null on cancel).
+	 * The open() callback can be skipped entirely if the window is not
+	 * foregrounded; log the outcome so a no-op is diagnosable. */
+	function pickFolder(win, title) {
+		return new Promise((resolve) => {
+			try {
+				const fp = Components.classes['@mozilla.org/filepicker;1']
+					.createInstance(Components.interfaces.nsIFilePicker);
+				// Gecko 128+/Zotero 8: init's arg 0 is a BrowsingContext, not a
+				// window — passing the window throws NS_ERROR_ILLEGAL_ARGUMENT.
+				// Keep the window form as a fallback for older Gecko builds.
+				try {
+					fp.init(win?.browsingContext ?? win, title, Components.interfaces.nsIFilePicker.modeGetFolder);
+				}
+				catch (e) {
+					fp.init(win, title, Components.interfaces.nsIFilePicker.modeGetFolder);
+				}
+				fp.open((result) => {
+					const path = result === Components.interfaces.nsIFilePicker.returnOK
+						? fp.file?.path ?? null
+						: null;
+					log(`folder picker result=${result} path=${path ?? '(none)'}`);
+					resolve(path);
+				});
+			}
+			catch (e) {
+				log(`folder picker failed to open: ${e?.message ?? e}`);
+				resolve(null);
+			}
+		});
+	}
+
 	/** Pick the desktop install dir manually (the fallback for installs the
 	 * detection can't see — portable copies, non-default locations). The
 	 * choice persists in the desktopDir pref, which findDesktopInstall tries
 	 * first, and resolves to 'desktop'. */
 	async function pickDesktopDir(win) {
 		try {
-			const fp = Components.classes['@mozilla.org/filepicker;1']
-				.createInstance(Components.interfaces.nsIFilePicker);
-			fp.init(win, '选择 dsh 桌面版安装目录（含 DeepSeek Harness.exe 的目录）', Components.interfaces.nsIFilePicker.modeGetFolder);
-			const dir = await new Promise((resolve) => {
-				fp.open((result) => {
-					resolve(result === Components.interfaces.nsIFilePicker.returnOK ? fp.file?.path ?? null : null);
-				});
-			});
-			if (!dir) return null;
+			await Zotero.Promise.delay(300); // let the source-choice modal fully close
+			log('pickDesktopDir: opening folder picker');
+			const dir = await pickFolder(win, '选择 dsh 桌面版安装目录（含 DeepSeek Harness.exe 的目录）');
+			if (!dir) { log('pickDesktopDir: cancelled'); return null; }
 			const exe = DSH.Util.joinPath(dir, 'DeepSeek Harness.exe');
 			if (!(await DSH.Util.pathExists(exe))) {
 				toast('DSH', `所选目录里没有 DeepSeek Harness.exe：${dir}`);
 				return null;
 			}
 			DSH.Util.prefSet('desktopDir', dir);
+			log(`pickDesktopDir: selected ${dir}`);
 			return 'desktop';
 		}
 		catch (e) {
@@ -558,21 +591,17 @@ DSH.Sidecar = (() => {
 
 	async function pickCustomDir(win) {
 		try {
-			const fp = Components.classes['@mozilla.org/filepicker;1']
-				.createInstance(Components.interfaces.nsIFilePicker);
-			fp.init(win, '选择包含 lib/bin.js 的 dsh 包目录', Components.interfaces.nsIFilePicker.modeGetFolder);
-			const dir = await new Promise((resolve) => {
-				fp.open((result) => {
-					resolve(result === Components.interfaces.nsIFilePicker.returnOK ? fp.file?.path ?? null : null);
-				});
-			});
-			if (!dir) return null;
+			await Zotero.Promise.delay(300); // let the source-choice modal fully close
+			log('pickCustomDir: opening folder picker');
+			const dir = await pickFolder(win, '选择包含 lib/bin.js 的 dsh 包目录');
+			if (!dir) { log('pickCustomDir: cancelled'); return null; }
 			const bin = DSH.Util.joinPath(dir, 'lib', 'bin.js');
 			if (!(await DSH.Util.pathExists(bin))) {
 				toast('DSH', `所选目录中没有 lib\\bin.js：${dir}`);
 				return null;
 			}
 			DSH.Util.prefSet('dshCustomDir', dir);
+			log(`pickCustomDir: selected ${dir}`);
 			// The mode stays 'auto' — the auto chain prefers the configured
 			// dir, so the resolved mode is 'custom' on every start.
 			return 'custom';
@@ -811,11 +840,11 @@ DSH.Sidecar = (() => {
 		return out;
 	}
 
-	/** Drop every dsh-auth cookie. dsh names them `dsh-auth-<random id>` — a
-	 * fresh id per exchange, not the launch token — and /connect always mints
-	 * a new one, so there is no "current" cookie worth keeping. Call BEFORE
-	 * /connect: the exchange request itself carries the (bloated) jar and
-	 * would 431 otherwise. */
+	/** Drop every dsh-auth cookie. dsh names them `dsh-auth-<sha256(host:port)>`
+	 * — a fresh name per launch port, NOT the token — and the remote content
+	 * process only ever sends the one cookie matching its own port, so old
+	 * ones are pure ballast. Call BEFORE /connect: the exchange request itself
+	 * carries the (bloated) jar and would 431 otherwise. */
 	function pruneAuthCookies() {
 		let host = '';
 		try { host = new URL(state.apiBase).hostname; }
@@ -825,19 +854,24 @@ DSH.Sidecar = (() => {
 		for (const cookie of hostCookies(host)) {
 			const name = String(cookie?.name ?? '');
 			if (!name.startsWith('dsh-auth-')) continue;
-			try {
-				Services.cookies.remove(cookie.host, name, cookie.path, false);
-				removed++;
+			const attrs = cookie?.originAttributes ?? {};
+			// Gecko 140+/Zotero 8: remove(host, name, path, originAttributes) —
+			// the old 5-arg form had an isSecure slot that no longer exists;
+			// passing `false` there throws NS_ERROR_ILLEGAL_VALUE. Try the
+			// modern 4-arg shape first, then legacy shapes for other builds.
+			const shapes = [
+				() => Services.cookies.remove(cookie.host, name, cookie.path, attrs),
+				() => Services.cookies.remove(cookie.host, name, cookie.path, false, attrs),
+				() => Services.cookies.remove(cookie.host, name, cookie.path, false),
+			];
+			let done = false;
+			let lastError = null;
+			for (const attempt of shapes) {
+				try { attempt(); done = true; break; }
+				catch (e) { lastError = e; }
 			}
-			catch (e) {
-				try {
-					Services.cookies.remove(cookie.host, name, cookie.path, false, cookie.originAttributes);
-					removed++;
-				}
-				catch (e2) {
-					log(`dsh-auth cookie remove failed: ${name.slice(0, 18)}…`, e2?.message ?? e2);
-				}
-			}
+			if (done) removed++;
+			else log(`dsh-auth cookie remove failed: ${name.slice(0, 18)}…`, lastError?.message ?? lastError);
 		}
 		if (removed) log(`pruned ${removed} stale dsh-auth cookie(s) for ${host}`);
 		return removed;
@@ -1253,11 +1287,28 @@ DSH.Sidecar = (() => {
 		}
 	}
 
+	/**
+	 * Whether a source is already determined so a start needs NO user
+	 * interaction. Used by the background pre-warm to skip first runs that
+	 * would otherwise pop the source-choice dialog. Mirrors resolveAutoMode's
+	 * detection but never prompts.
+	 */
+	async function hasReadySource() {
+		const mode = dshMode();
+		if (mode === 'attach') return !!String(prefGet('attachUrl', '') || '').trim();
+		if (mode === 'bundled') return await DSH.Util.pathExists(dshBinJsFor('bundled'));
+		// auto: configured custom dir → desktop install → bundled runtime.
+		if (customDshDir() && await DSH.Util.pathExists(dshBinJsFor('custom'))) return true;
+		if (await findDesktopInstall()) return true;
+		return await DSH.Util.pathExists(dshBinJsFor('bundled'));
+	}
+
 	return {
 		state, getPhase, isReady, onStateChange, dshMode, sourceInfo,
 		dataDir, pluginDir, runtimeDir, dshHome, profileName, bridgeToken,
 		nodePath, ensureStarted, ensureRuntime, seedPlugin, seedProfile,
 		connectAuth, rpc, plugin, pluginRaw, translateStream, stop, listModels,
 		cleanupInfo, removeBundledRuntime, removeCustomDir, withColdHint,
+		hasReadySource, pickFolder,
 	};
 })();

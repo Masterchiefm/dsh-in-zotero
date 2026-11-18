@@ -1,6 +1,6 @@
 {
   "name": "dsh-in-zotero",
-  "version": "0.1.3",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "description": "Embed DeepSeek Harness (dsh) into Zotero. Development/build tooling only — the plugin itself has zero runtime dependencies.",

@@ -44,11 +44,18 @@ pref("extensions.zotero.dsh-in-zotero.npmRegistry", "");
 // Keep the sidecar running after the last dsh surface closes (translations and
 // metadata tasks still use it). It is always stopped when Zotero exits.
 pref("extensions.zotero.dsh-in-zotero.keepRunning", true);
+// Pre-warm the sidecar a few seconds after Zotero starts, in the background.
+// Turns the multi-second engine boot into zero perceived latency when the user
+// first clicks the wake button or selects text to translate. Skipped on a
+// first run that still needs a source-choice dialog, and when keepRunning is
+// off (no point booting an instance that would be torn down immediately).
+pref("extensions.zotero.dsh-in-zotero.warmStart", true);
 // Floating-panel geometry {left, top, width, height} (JSON, px).
 pref("extensions.zotero.dsh-in-zotero.panelBox", "");
 // Show the "译" translate button in the reader selection popup.
 pref("extensions.zotero.dsh-in-zotero.translateEnabled", true);
-// Auto-translate as soon as text is selected (dsh must already be running).
+// Auto-translate as soon as text is selected. Cold start is handled: the
+// translate popup boots the sidecar via ensureStarted() when it isn't ready.
 pref("extensions.zotero.dsh-in-zotero.translateAuto", false);
 // Translate using reasoning mode when the selected model supports it.
 pref("extensions.zotero.dsh-in-zotero.translateThinking", false);

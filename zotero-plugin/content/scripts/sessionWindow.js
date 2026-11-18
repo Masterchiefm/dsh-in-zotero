@@ -707,13 +707,22 @@ DSH.SessionWindow = (() => {
 
 	/**
 	 * Make sure the live browser shows the dsh web UI at all. At most one full
-	 * load happens per sidecar run, and it uses a COOKIE-AUTHENTICATED BARE URL.
-	 * Never load the token URL here: every `?token=` request makes dsh mint a
-	 * fresh `dsh-auth-<id>` cookie, so repeated full loads fill Zotero's cookie
-	 * jar until dsh answers `431 Request Header Fields Too Large` (and the
-	 * ?token → 303 → ./ redirect also drops the fragment). `connectAuth` has
-	 * already exchanged the token into a cookie before we get here; the
-	 * chrome process and the remote content process share the same cookie jar.
+	 * load happens per sidecar run, and it uses the LAUNCH URL (with ?token=)
+	 * so the REMOTE content process can authenticate on the first request.
+	 *
+	 * Why not the bare URL: dsh's browser cookie is SameSite=Strict and named
+	 * `dsh-auth-<sha256(host:port)>`. `connectAuth` mints it in the CHROME
+	 * process via XHR, but a top-level navigation chrome:// → http://127.0.0.1
+	 * is cross-site, so the isolated content process never sends a Strict
+	 * cookie and dsh answers 401 "dsh web authentication required" — which
+	 * used to flash for ~30 s while waitForPage polled before a token fallback.
+	 * The launch URL lets dsh verify the token IN the content process, mint the
+	 * cookie there, and 303 to "./"; from then on the same-site page is fine.
+	 *
+	 * Hash safety: this URL carries NO #fragment (the 303 drops the query but
+	 * would also drop a fragment). The session hash is attached afterwards by
+	 * navigateToSession() with a fragment-only navigation, so nothing is lost.
+	 * Cookie bloat is kept in check by connectAuth's pruneAuthCookies().
 	 */
 	async function ensurePageLoaded() {
 		const browser = state.browser;
@@ -726,8 +735,11 @@ DSH.SessionWindow = (() => {
 			const ids = await pageSessionIds();
 			if (ids !== null) return true; // page alive and reporting
 		}
-		log(`ensurePageLoaded: full load via cookie-authenticated bare URL (${degraded() ? 'degraded attach' : 'bundled'})`);
-		loadBrowser(`${apiBase}/`);
+		const launchUrl = DSH.Sidecar.state.token
+			? (DSH.Sidecar.state.url || `${apiBase}/?token=${encodeURIComponent(DSH.Sidecar.state.token)}`)
+			: `${apiBase}/`; // attach URL with no token: existing cookies only
+		log(`ensurePageLoaded: full load via launch URL (${degraded() ? 'degraded attach' : 'bundled'})`);
+		loadBrowser(launchUrl);
 		if (degraded()) {
 			// Nothing will ever report back — settle for the document landing.
 			for (let i = 0; i < 40 && !onOrigin(); i++) {
@@ -736,14 +748,6 @@ DSH.SessionWindow = (() => {
 			await Zotero.Promise.delay(800); // give the SPA a beat to paint
 			return onOrigin();
 		}
-		if (await waitForPage(90)) return true;
-		// Defensive fallback ONLY: if the bare URL genuinely failed to
-		// authenticate (cookie not visible to the content process on this
-		// build), retry once with the token URL and re-exchange. Normal runs
-		// never reach here. connectAuth prunes the jar first, so no 431.
-		log('bare URL did not authenticate — retrying once with the token URL');
-		await DSH.Sidecar.connectAuth();
-		loadBrowser(DSH.Sidecar.state.url || `${apiBase}/`);
 		if (await waitForPage(90)) return true;
 		throw new Error('dsh 页面加载超时（嵌入式界面无响应）');
 	}

@@ -198,6 +198,17 @@ Zotero.DSHinZotero = {
 	uninstallBundledRuntime() {
 		return DSH.Sidecar.removeBundledRuntime();
 	},
+	/** Install the npm runtime on demand (counterpart of the uninstall button).
+	 * onStatus receives progress lines; resolves when installed or already
+	 * present. */
+	installBundledRuntime(onStatus) {
+		return DSH.Sidecar.ensureRuntime(onStatus, true);
+	},
+	/** Open a folder picker from the settings pane and return the chosen path
+	 * (or null on cancel). The pane passes its own window as the parent. */
+	pickFolder(win, title) {
+		return DSH.Sidecar.pickFolder(win, title);
+	},
 	/** Remove the configured local dsh package dir (and its reference). */
 	uninstallCustomDir() {
 		return DSH.Sidecar.removeCustomDir();
@@ -266,6 +277,33 @@ Zotero.DSHinZotero = {
 			Zotero.addShutdownListener(() => {
 				try { DSH.Sidecar.stop(); } catch (e) { /* best effort */ }
 			});
+
+			// Background pre-warm: boot the engine while Zotero is idle so the
+			// first wake click / selection-translate is instant instead of paying
+			// the ~4 s engine start on the user's critical path. Deliberately
+			// delayed past startup; skipped when the source is not yet determined
+			// (would pop the first-run choice dialog), keepRunning is off (nothing
+			// would persist), or the user disabled it. Failures stay silent — a
+			// later real action retries through ensureStarted. No UI callbacks:
+			// onStatus is a no-op so no strip/popup chatter appears on boot.
+			if (DSH.Util.prefGet('warmStart', true) && DSH.Util.prefGet('keepRunning', true)) {
+				void (async () => {
+					try {
+						await Zotero.Promise.delay(2500);
+						if (DSH.Sidecar.isReady()) return;
+						if (!(await DSH.Sidecar.hasReadySource())) {
+							DSH.Util.log('warm start skipped: dsh source not determined yet');
+							return;
+						}
+						DSH.Util.log('warm start: booting dsh in background');
+						await DSH.Sidecar.ensureStarted({ rootURI, onStatus: () => {} });
+						DSH.Util.log('warm start: sidecar ready');
+					}
+					catch (e) {
+						DSH.Util.log('warm start failed (will retry on demand)', e?.message ?? e);
+					}
+				})();
+			}
 
 			// Persist the bridge token next to the plugin data (same local trust
 			// boundary as the Zotero prefs it already lives in) so local test

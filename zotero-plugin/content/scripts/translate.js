@@ -164,7 +164,7 @@ DSH.Translate = (() => {
 		// selection. Shows an explicit 开/关 state next to the lever.
 		const auto = doc.createElement('button');
 		auto.className = 'dsh-translate-auto';
-		auto.title = '自动翻译：开启后划选文字立即翻译（需 dsh 已在后台运行）';
+		auto.title = '自动翻译：开启后划选文字立即翻译（dsh 未运行时会自动唤起）';
 		const autoLabel = doc.createElement('span');
 		autoLabel.className = 'dsh-auto-label';
 		autoLabel.textContent = '自动';
@@ -434,9 +434,12 @@ DSH.Translate = (() => {
 		}
 		active.set(readerKey, { root: section });
 
-		// Auto mode fires immediately — but only when dsh is already warm, so a
-		// stray selection never spawns the sidecar on its own.
-		if (DSH.Util.prefGet('translateAuto', false) && DSH.Sidecar.isReady()) {
+		// Auto mode fires immediately on every new selection — including a cold
+		// start. run()/start() boot the sidecar via ensureStarted() when needed
+		// (with an inline "正在唤起 dsh 服务…" hint), so the user no longer has
+		// to click 译 once just to wake it. Repeated selections are guarded by
+		// abortActive(readerKey) at the top of onRenderTextSelectionPopup.
+		if (DSH.Util.prefGet('translateAuto', false)) {
 			run();
 		}
 	}

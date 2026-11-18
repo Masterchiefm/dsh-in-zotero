@@ -56,6 +56,97 @@
 		}).catch(() => { /* detection failed — keep placeholder text */ });
 	}
 
+	/** The two "浏览…" buttons: open a folder picker RIGHT HERE in the prefs
+	 * window's own sandbox. It must not be routed through the plugin's main
+	 * sandbox (api.pickFolder): a XUL window object crossing sandboxes is not a
+	 * valid nsIDOMWindow, and fp.init() throws "Could not convert JavaScript
+	 * argument arg 0", silently doing nothing. Here `window` is the native
+	 * prefs window, so the picker opens normally. The chosen path is written
+	 * into the pref-bound textbox (an input event makes Zotero save it). */
+	function wireDirPickers(doc) {
+		// Gecko 128+/Zotero 8 changed nsIFilePicker.init's first argument from
+		// an nsIDOMWindow to a BrowsingContext — passing a window throws
+		// "Could not convert JavaScript argument arg 0" (verified against
+		// Zotero's own certManager.js: fp.init(window.browsingContext, …)).
+		// The prefs pane's own browsingContext is the correct parent here.
+		const parent = window.browsingContext ?? null;
+		window.__dshPickerReady = parent ? 'browsingContext' : 'no browsingContext';
+
+		const pick = (title) => new Promise((resolve) => {
+			if (!parent) { resolve(null); return; }
+			try {
+				const fp = Components.classes['@mozilla.org/filepicker;1']
+					.createInstance(Components.interfaces.nsIFilePicker);
+				fp.init(parent, title, Components.interfaces.nsIFilePicker.modeGetFolder);
+				fp.open((result) => {
+					resolve(result === Components.interfaces.nsIFilePicker.returnOK
+						? fp.file?.path ?? null
+						: null);
+				});
+			}
+			catch (e) {
+				Zotero?.logError?.(e);
+				resolve(null);
+			}
+		});
+		const bind = (btnId, inputId, title) => {
+			doc.getElementById(btnId)?.addEventListener('command', () => {
+				void pick(title).then((dir) => {
+					if (!dir) return; // cancelled
+					const input = doc.getElementById(inputId);
+					if (!input) return;
+					input.value = dir;
+					input.dispatchEvent(new Event('input', { bubbles: true }));
+				});
+			});
+		};
+		bind('dsh-custom-pick', 'dsh-custom-dir', '选择包含 lib/bin.js 的 dsh 包目录');
+		bind('dsh-desktop-pick', 'dsh-desktop-dir', '选择 dsh 桌面版安装目录（含 DeepSeek Harness.exe）');
+	}
+
+	/** The install section: reflect whether the npm runtime is present and
+	 * wire the install button (counterpart of the uninstall section below). */
+	function fillInstall(doc) {
+		const api = window.Zotero?.DSHinZotero;
+		if (typeof api?.dshCleanupInfo !== 'function') return;
+		const statusEl = doc.getElementById('dsh-install-status');
+		const btn = doc.getElementById('dsh-install-bundled');
+		const refresh = async () => {
+			try {
+				const info = await Promise.resolve(api.dshCleanupInfo());
+				const has = !!info?.runtime;
+				if (btn) btn.disabled = has;
+				if (statusEl) statusEl.textContent = has
+					? `内置运行时已安装：${info.runtime.path}。无需重复安装；如需更换版本，先在下方卸载。`
+					: '未安装 npm 内置运行时。点下方按钮一键安装 @deepseek-ai/dsh（需 Node ≥ 24.9，约 1-3 分钟）。';
+			}
+			catch (e) {
+				if (statusEl) statusEl.textContent = `状态检测失败：${e?.message ?? e}`;
+			}
+		};
+		doc.getElementById('dsh-install-refresh')?.addEventListener('command', () => { void refresh(); });
+		btn?.addEventListener('command', async () => {
+			if (typeof api?.installBundledRuntime !== 'function' || btn.disabled) return;
+			const prev = btn.label;
+			btn.disabled = true;
+			btn.label = '正在安装…';
+			const show = (text) => { if (statusEl) statusEl.textContent = text; };
+			try {
+				await api.installBundledRuntime(show);
+				show('内置运行时安装完成。可在「来源」中选「npm 内置运行时」或保持「自动检测」。');
+				fillCleanup(doc); // refresh the uninstall section too
+			}
+			catch (e) {
+				show(`安装失败：${e?.message ?? e}`);
+			}
+			finally {
+				btn.label = prev;
+				await refresh();
+			}
+		});
+		void refresh();
+	}
+
 	/** The uninstall section: show what the plugin installed, wire the two
 	 * removal buttons (the custom-dir one gated by an explicit checkbox —
 	 * it is the USER's directory, not plugin-owned). */
@@ -287,6 +378,8 @@
 		});
 
 		fillSourceInfo(doc);
+		wireDirPickers(doc);
+		fillInstall(doc);
 		fillCleanup(doc);
 	}
 

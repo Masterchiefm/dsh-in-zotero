@@ -1276,6 +1276,13 @@ DSH.Bridge = (() => {
 				: 0,
 			modelHint: doc.getElementById('dsh-translate-model-hint')?.textContent?.slice(0, 120) ?? null,
 			desktopBox: !!doc.getElementById('dsh-desktop-dir'),
+			customPick: !!doc.getElementById('dsh-custom-pick'),
+			desktopPick: !!doc.getElementById('dsh-desktop-pick'),
+			installButton: !!doc.getElementById('dsh-install-bundled'),
+			installRefresh: !!doc.getElementById('dsh-install-refresh'),
+			installStatus: doc.getElementById('dsh-install-status')?.textContent?.slice(0, 120) ?? null,
+			installDisabled: doc.getElementById('dsh-install-bundled')?.disabled ?? null,
+			pickerReady: win.__dshPickerReady ?? null,
 		};
 		return out;
 	}
