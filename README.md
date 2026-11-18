@@ -10,17 +10,22 @@
 ### 推荐：让 dsh 的 AI 替你装
 
 1. 先下载安装 [dsh 官方桌面版](https://github.com/deepseek-ai/deepseek-harness)，完成登录与模型配置
-2. 在 dsh 里新建对话，粘贴下面这段提示词，让 agent 替你下载插件（网络不畅时它会自行尝试代理或加速镜像）：
+2. 在 dsh 里新建对话，粘贴下面这段提示词，agent 会自行完成下载与安装的全过程（网络不畅时它会自行尝试代理或加速镜像）：
 
    ```text
-   请帮我安装 Zotero 插件 dsh-in-zotero。访问 https://github.com/Masterchiefm/dsh-in-zotero/releases/latest ，
-   下载最新的 dsh-in-zotero-<版本号>.xpi，保存到桌面。如果 GitHub 直连失败或太慢，请尝试走系统代理，
-   或改用加速镜像（例如在下载地址前拼接 https://ghfast.top/ 或 https://gh-proxy.com/ 前缀）重试。
-   下载完成后：1) 告诉我文件保存位置；2) 给出在 Zotero 里安装它的步骤
-   （Zotero → 工具 → 插件 → 右上角齿轮 → Install Plugin From File…，选中该 .xpi，然后重启 Zotero）。
+   请全程自动为我安装 Zotero 插件 dsh-in-zotero，不要把安装步骤留给我：
+   1) 从 https://github.com/Masterchiefm/dsh-in-zotero/releases/latest 下载最新的 dsh-in-zotero-<版本号>.xpi；
+      GitHub 直连失败或太慢时自行尝试系统代理，或改用加速镜像（例如在下载地址前拼接
+      https://ghfast.top/ 或 https://gh-proxy.com/ 前缀）重试。
+   2) 从 profiles.ini 找到我的 Zotero 默认 profile（Windows 通常在 %APPDATA%\Zotero\Zotero\Profiles，
+      macOS/Linux 在 ~/Library/Application Support/Zotero/Zotero/Profiles 或 ~/.zotero/zotero）。
+   3) 若 Zotero 正在运行，先帮我退出它；把下载的 xpi 复制为该 profile 下
+      extensions/dsh-in-zotero@dsh.local.xpi。
+   4) 启动 Zotero，确认插件管理器里出现 dsh-in-zotero，然后把结果告诉我。
+   注意：全程不要读写 zotero.sqlite。
    ```
 
-3. 按 agent 给出的步骤在 Zotero 里装好插件并重启——之后点文献列表工具栏右侧的 DSH 唤醒按钮即可开始（插件会自动检测桌面版 dsh）
+3. agent 报告安装完成后，点文献列表工具栏右侧的 DSH 唤醒按钮即可开始（插件会自动检测桌面版 dsh）
 
 ### 手动安装
 
