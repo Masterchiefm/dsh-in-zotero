@@ -7,6 +7,23 @@
 
 ## 下载安装
 
+### 推荐：让 dsh 的 AI 替你装
+
+1. 先下载安装 [dsh 官方桌面版](https://github.com/deepseek-ai/deepseek-harness)，完成登录与模型配置
+2. 在 dsh 里新建对话，粘贴下面这段提示词，让 agent 替你下载插件（网络不畅时它会自行尝试代理或加速镜像）：
+
+   ```text
+   请帮我安装 Zotero 插件 dsh-in-zotero。访问 https://github.com/Masterchiefm/dsh-in-zotero/releases/latest ，
+   下载最新的 dsh-in-zotero-<版本号>.xpi，保存到桌面。如果 GitHub 直连失败或太慢，请尝试走系统代理，
+   或改用加速镜像（例如在下载地址前拼接 https://ghfast.top/ 或 https://gh-proxy.com/ 前缀）重试。
+   下载完成后：1) 告诉我文件保存位置；2) 给出在 Zotero 里安装它的步骤
+   （Zotero → 工具 → 插件 → 右上角齿轮 → Install Plugin From File…，选中该 .xpi，然后重启 Zotero）。
+   ```
+
+3. 按 agent 给出的步骤在 Zotero 里装好插件并重启——之后点文献列表工具栏右侧的 DSH 唤醒按钮即可开始（插件会自动检测桌面版 dsh）
+
+### 手动安装
+
 1. 到 [**Releases**](https://github.com/Masterchiefm/dsh-in-zotero/releases/latest) 下载最新的 `dsh-in-zotero-x.y.z.xpi`
    （国内直连 GitHub 慢时，可用任意 GitHub 加速镜像前缀拼接下载地址；也可从 [Zotero 中文社区插件商店](https://github.com/zotero-chinese/zotero-plugins) 安装）
 2. 打开 Zotero → 工具 → 插件 → 右上角齿轮 → **Install Plugin From File…** → 选中下载的 `.xpi`
