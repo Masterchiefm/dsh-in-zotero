@@ -194,3 +194,7 @@ update.json         → Zotero 原生插件更新清单（CI 维护）
 
 - 提示词与工具形态大量参考 [dsh-zot-library](https://github.com/GenePad/dsh-zot-library)（dsh 的 Zotero 直连文献库插件——本项目把写路径换成 Zotero 官方接口并反向嵌入进 Zotero）。
 - [zotero-chinese](https://zotero-chinese.com/plugin-dev-guide/) 的插件开发指南。
+
+## 协议
+
+[MIT](LICENSE) © Masterchiefm

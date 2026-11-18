@@ -1,6 +1,7 @@
 {
   "name": "dsh-in-zotero-bridge",
   "version": "0.1.19",
+  "license": "MIT",
   "description": "DeepSeek Harness bridge for Zotero: zotero_* agent tools over Zotero's own HTTP APIs, streaming translation, and session management for the dsh-in-zotero plugin.",
   "type": "module",
   "main": "./index.js",
