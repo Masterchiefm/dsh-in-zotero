@@ -85,16 +85,23 @@ DSH.Update = (() => {
 		throw lastError ?? new Error('全部下载源都失败了');
 	}
 
-	/** Install a downloaded .xpi via Zotero's own installer. Resolves to true
-	 * when the install was handed off successfully. */
+	/** Install a downloaded .xpi through Gecko's AddonManager — the same
+	 * installer Zotero's own plugin UI uses (Zotero's plugins.js hooks the
+	 * AddonManager listeners that shut down the old half and start the new
+	 * one). */
 	async function installXpi(buffer, file) {
 		const path = PathUtils.join(PathUtils.tempDir, file);
 		await IOUtils.write(path, new Uint8Array(buffer));
-		const installer = Zotero.Utilities?.Internal?.installAddon;
-		if (typeof installer !== 'function') throw new Error('当前 Zotero 版本没有可编程的插件安装接口');
-		// Zotero 7: installAddon(path, openPrefs, origin) — moves the file into
-		// the profile and registers the addon through Gecko's AddonManager.
-		await installer.call(Zotero.Utilities.Internal, path, true, 'dsh-in-zotero-updater');
+		const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+		const fileObj = Components.classes['@mozilla.org/file/local;1']
+			.createInstance(Components.interfaces.nsIFile);
+		fileObj.initWithPath(path);
+		const install = await AddonManager.getInstallForFile(fileObj);
+		if (!install) throw new Error('无法解析插件包（xpi 损坏或与当前 Zotero 不兼容）');
+		if (install.state === AddonManager.STATE_DOWNLOAD_FAILED || install.state === AddonManager.STATE_INSTALL_FAILED) {
+			throw new Error(`插件包不可安装：${install.error ?? '未知错误'}`);
+		}
+		await install.install();
 		return path;
 	}
 
