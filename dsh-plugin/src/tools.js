@@ -124,9 +124,9 @@ export function createTools({ logger = console } = {}) {
     }),
     makeTool({
       name: 'zotero_identify',
-      description: '一步识别条目的权威元数据（更新/补全/重取元数据任务的首选第一步，不要用 zotero_read + zotero_lookup 手工拼凑其内部流程）。内部流程：读条目现状与附件首页文本 → 从 DOI/URL/文本提取 DOI、arXiv、ISBN、PMID → 按强度依次联网解析（Crossref → doi.org → OpenAlex 摘要补全 → arXiv → PubMed）→ 与条目现有标题交叉比对打分。命中时返回 draft（可直接拆成 zotero_update 的 itemType/fields/creators）与 titleMatch（≥0.6 视为同源）；未命中标识符时按题名返回 candidates 列表（含 titleMatch 与 score，择优用 zotero_lookup 复核）。',
+      description: '一步识别条目的权威元数据（更新/补全/重取元数据任务的首选第一步，不要用 zotero_read + zotero_lookup 手工拼凑其内部流程）。id 也可以直接给**独立附件**的 id（拖进库还没识别的 PDF 等）——它会读该附件的首页文本来识别。内部流程：读条目现状与附件首页文本 → 从 DOI/URL/文本提取 DOI、arXiv、ISBN、PMID → 按强度依次联网解析（Crossref → doi.org → OpenAlex 摘要补全 → arXiv → PubMed）→ 与条目现有标题交叉比对打分。命中时返回 draft（普通条目可直接拆成 zotero_update 的 itemType/fields/creators；独立附件则交给 zotero_add 新建条目并挂接）与 titleMatch（≥0.6 视为同源）；未命中标识符时按题名返回 candidates 列表（含 titleMatch 与 score，择优用 zotero_lookup 复核）。',
       properties: {
-        id: { type: 'number', description: '条目数字 id（来自 zotero_search / 任务描述）' },
+        id: { type: 'number', description: '条目数字 id，或独立附件的 id（来自 zotero_search / zotero_item / 任务描述）' },
         text: { type: 'string', description: '可选：已掌握的文本片段（如文件名、标题行），作为额外语料参与标识符提取' },
       },
       required: ['id'],
@@ -286,13 +286,14 @@ export function createTools({ logger = console } = {}) {
     }),
     makeTool({
       name: 'zotero_add',
-      description: '新建条目。字段名用 Zotero 标准名（title、publicationTitle、date、DOI、abstractNote…，合法值见 zotero_itemtypes）。shortTitle 写中文 10~20 字的重点概括；abstractNote 原样带入检索到的原文摘要。建好后可用 zotero_update 的 addCollections 归类、用 zotero_attach 挂附件。',
+      description: '新建条目。字段名用 Zotero 标准名（title、publicationTitle、date、DOI、abstractNote…，合法值见 zotero_itemtypes）。**DOI 与 url 字段就是条目的「链接」**——入库类任务务必带上，即使拿不到 PDF，条目加链接也是完整的交付物。shortTitle 写中文 10~20 字的重点概括；abstractNote 原样带入检索到的原文摘要。adoptAttachmentIDs 把库里已有的**独立附件**（无父条目的 PDF 等）挂到新条目名下——「为没信息的附件识别建条目」就用它，一次调用完成建条目+挂接，绝不要再用 zotero_attach 重新导入同一文件（会复制出第二份）；新条目自动继承附件原在的分类。建好后用 zotero_locate {id} 在列表里定位高亮给用户看，还可用 zotero_update 的 addCollections 归类、用 zotero_attach 挂其他文件。',
       properties: {
         itemType: { type: 'string', description: '条目类型，如 journalArticle' },
         fields: { type: 'object', description: '字段名 → 值' },
         creators: { type: 'array', items: { type: 'object' }, description: '作者列表' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签列表' },
         collectionIDs: { type: 'array', items: { type: 'number' }, description: '要加入的分类 id 列表' },
+        adoptAttachmentIDs: { type: 'array', items: { type: 'number' }, description: '要挂到新条目名下的独立附件 id 列表（附件必须当前没有父条目）' },
       },
       required: ['itemType'],
       timeoutMs: 60_000,
@@ -302,14 +303,14 @@ export function createTools({ logger = console } = {}) {
     }),
     makeTool({
       name: 'zotero_attach',
-      description: '给已有条目添加附件：path 为本地文件绝对路径（经 Zotero 导入并复制进其存储目录）或 url 为网页链接附件。用户要求「把某 PDF 关联到这条文献」时用。',
+      description: '添加附件：path 为本地文件绝对路径（经 Zotero 导入并复制进其存储目录）或 url 为网页链接附件，默认挂到 id 指定的父条目上；standalone:true 时不挂父条目、作为独立附件先入库（「先收下这个 PDF，之后再识别建条目」的场景，之后用 zotero_add 的 adoptAttachmentIDs 挂到正式条目）。用户要求「把某 PDF 关联到这条文献」时用默认模式。',
       properties: {
-        id: { type: 'number', description: '父条目数字 id' },
+        id: { type: 'number', description: '父条目数字 id（standalone 模式省略）' },
         path: { type: 'string', description: '本地文件绝对路径；给了 path 就忽略 url' },
         url: { type: 'string', description: '网页链接（http/https）' },
         title: { type: 'string', description: '链接附件的标题，默认用 URL' },
+        standalone: { type: 'boolean', description: 'true 时不挂父条目，作为独立附件入库' },
       },
-      required: ['id'],
       timeoutMs: 180_000,
       async execute(args) {
         return call('attach', args, { timeoutMs: 180_000 })
@@ -421,6 +422,19 @@ export function createTools({ logger = console } = {}) {
       required: ['id'],
       async execute(args) {
         return call('open', args, { timeoutMs: 30_000 })
+      },
+    }),
+    makeTool({
+      name: 'zotero_locate',
+      description: '在 Zotero 文献列表中定位并高亮一个条目：自动切到能显示它的视图（当前分类，必要时回退库根或回收站），选中并滚动到该条目，用户立刻能在列表里看到。新建条目后用它把结果亮给用户看；用户问「某文献在库里哪里」时也用它。给附件 id 时定位其父条目。',
+      properties: {
+        id: { type: 'number', description: '条目数字 id（附件 id 会定位到其父条目）' },
+        focus: { type: 'boolean', description: '默认 true：把文献列表标签页带到前台；false 时仅后台选中（用户当前停在别处时不打扰）' },
+      },
+      required: ['id'],
+      timeoutMs: 30_000,
+      async execute(args) {
+        return call('locate', args, { timeoutMs: 30_000 })
       },
     }),
   ]

@@ -14,8 +14,17 @@
 DSH.Translate = (() => {
 	const { log, toast } = DSH.Util;
 
-	// One active translation per reader instance; a new selection aborts it.
-	const active = new Map(); // readerKey -> { stop, root }
+	// One live translation per reader instance; a genuinely new selection
+	// aborts it. The entry carries the selection text so a popup RE-RENDER
+	// (Zotero wipes ALL plugin sections and re-dispatches on every scroll /
+	// view update while a selection popup is open — the popup's rect updates
+	// go through React state) can be told apart from a new selection: a
+	// re-render re-attaches the LIVE section (the stream keeps writing into
+	// the re-parented node) instead of aborting + restarting the request.
+	// The old restart-on-every-render loop is what made the「自动」toggle
+	// impossible to click (its DOM kept being replaced between mousedown and
+	// click while auto-translate was on) and made the stream flicker/reset.
+	const active = new Map(); // readerKey -> { text, section, stop?, cancelled?, width? }
 
 	// Width ladder for the auto-widen behavior (px). START mirrors the CSS
 	// default below; the popup's own max-width (198px in reader.css) is lifted
@@ -55,6 +64,16 @@ DSH.Translate = (() => {
 	background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 	transition: left 0.15s ease;
 }
+.dsh-translate-ask {
+	display: inline-flex; align-items: center;
+	height: 24px; margin: 0 2px; padding: 0 9px;
+	border: 1px solid var(--fill-tertiary); border-radius: 999px;
+	background: transparent; color: var(--fill-secondary);
+	font-size: 11.5px; font-weight: 600; line-height: 1; cursor: pointer; user-select: none;
+}
+.dsh-translate-ask:hover { background: var(--fill-quinary); color: var(--fill-primary); }
+.dsh-translate-ask:active { filter: brightness(0.92); }
+.dsh-translate-ask[disabled] { opacity: 0.6; cursor: default; }
 .dsh-translate-auto[aria-pressed="true"] {
 	border-color: var(--color-accent); color: var(--fill-primary);
 }
@@ -128,6 +147,7 @@ DSH.Translate = (() => {
 	function abortActive(readerKey) {
 		const entry = active.get(readerKey);
 		if (!entry) return;
+		entry.cancelled = true;
 		try { entry.stop?.(); } catch (e) { /* already stopped */ }
 		active.delete(readerKey);
 	}
@@ -142,18 +162,31 @@ DSH.Translate = (() => {
 		const text = params?.annotation?.text;
 		if (!text || !text.trim()) return;
 		const readerKey = reader?._tabID ?? reader?.tabID ?? reader?.itemID ?? 'default';
-		abortActive(readerKey);
+		const prev = active.get(readerKey);
+		// Same selection rendered again (the popup got wiped by a scroll/view
+		// update)? Resume: keep the live section. Anything else is new.
+		const resumed = !!(prev && prev.text === text && prev.section);
+		if (!resumed) abortActive(readerKey);
 
 		ensureStyle(doc);
+		const entry = resumed ? prev : { text, section: null, stop: null, cancelled: false, width: WIDTH_START };
+		if (!resumed) active.set(readerKey, entry);
 
 		// Single root for buttons + output: the reader wraps each append() in
 		// its own bordered ".section", so appending twice drew two separators.
 		const root = doc.createElement('div');
 		root.className = 'dsh-translate-root';
 
-		const section = doc.createElement('div');
-		section.className = 'dsh-translate-section';
-		section.style.display = 'none';
+		const section = resumed ? prev.section : doc.createElement('div');
+		if (resumed) {
+			// The stream (if still running) keeps writing into this element.
+			section.style.display = 'block';
+		}
+		else {
+			section.className = 'dsh-translate-section';
+			section.style.display = 'none';
+			entry.section = section;
+		}
 
 		const button = doc.createElement('button');
 		button.className = 'dsh-translate-button';
@@ -186,12 +219,44 @@ DSH.Translate = (() => {
 			if (on && !section.textContent) run();
 		});
 
+		// 「问 AI」：把所选文字送进本文绑定会话的输入框（不发送）——问题由
+		// 用户自己补全后手动发送。走 SessionWindow 的 reader 绑定：无绑定则
+		// 静默新建并绑定（与标签跟随同一语义），面板同时弹出显示该会话。
+		const ask = doc.createElement('button');
+		ask.className = 'dsh-translate-ask';
+		ask.title = '把这段话送进本文的 DSH 会话输入框（不发送，问题由你补全后自己发送）';
+		ask.textContent = '问AI';
+		ask.addEventListener('click', () => {
+			if (ask.disabled) return;
+			ask.disabled = true;
+			ask.textContent = '…';
+			void (async () => {
+				try {
+					const delivered = await DSH.SessionWindow.open('reader', reader.itemID, { askText: text });
+					if (!DSH.Sidecar.state.bridgeOk) {
+						toast('DSH 问AI', '外部 dsh 实例无桥接，已打开会话；所选文字无法自动填入，请手动粘贴');
+					}
+					else if (delivered === false) {
+						toast('DSH 问AI', '已打开会话，但输入框未自动填入（可重试一次）');
+					}
+				}
+				catch (e) {
+					log('ask button failed', e?.message ?? e);
+					toast('DSH 问AI', `打开会话失败：${e?.message ?? e}`);
+				}
+				finally {
+					ask.disabled = false;
+					ask.textContent = '问AI';
+				}
+			})();
+		});
+
 		// --- auto-widen -----------------------------------------------------
 		// reader.css caps .selection-popup at 198px, so long translations used
 		// to pile into a tall narrow column. Track the section width and grow
 		// it (together with the popup's cap) whenever the content overflows
 		// the height limit — the text reflows wider instead of taller.
-		let width = WIDTH_START;
+		let width = resumed && Number(prev.width) > 0 ? prev.width : WIDTH_START;
 		let fitPending = false;
 		const popupEl = () => {
 			try { return section.closest('.selection-popup'); }
@@ -199,6 +264,7 @@ DSH.Translate = (() => {
 		};
 		const applyWidth = (w) => {
 			width = w;
+			entry.width = w; // survives popup re-renders (resume path)
 			section.style.maxWidth = `${w}px`;
 			// 20px covers .selection-popup's own padding (8×2) + rounding.
 			const popup = popupEl();
@@ -269,6 +335,12 @@ DSH.Translate = (() => {
 		};
 
 		const run = () => {
+			// 译 click (or auto-fire) on a section that may already stream:
+			// stop the live request first, then reset. `gen` supersedes a
+			// start() that is still mid-ensureStarted.
+			const gen = (entry.gen = (entry.gen ?? 0) + 1);
+			try { entry.stop?.(); } catch (e) { /* already stopped */ }
+			entry.stop = null;
 			section.style.display = 'block';
 			button.classList.add('running');
 			section.textContent = '';
@@ -366,12 +438,17 @@ DSH.Translate = (() => {
 					section.appendChild(err);
 					return;
 				}
+				// Superseded (re-translate) or cancelled (new selection) while
+				// the sidecar was starting? Bail before creating the request.
+				if (entry.gen !== gen || entry.cancelled || !doc.contains(section)) return;
 				const stop = DSH.Sidecar.translateStream(
 					text,
 					(evt) => {
 						if (!doc.contains(section)) {
-							// The popup was dismissed; stop streaming.
-							abortActive(readerKey);
+							// The popup was dismissed (or a new selection rebuilt
+							// it) — stop streaming, but only tear down the entry
+							// if it is still the live one for this reader.
+							if (active.get(readerKey) === entry) abortActive(readerKey);
 							return;
 						}
 						if (evt.type === 'thinking') {
@@ -387,6 +464,7 @@ DSH.Translate = (() => {
 						}
 						else if (evt.type === 'done') {
 							renderAnswer();
+							button.classList.remove('running');
 							if (!answerEl.textContent) answerEl.textContent = '(模型未返回内容)';
 							// 深度思考开关开着但模型没思考（不支持/未触发）——
 							// 顺手说明，免得用户以为功能丢了。
@@ -401,6 +479,7 @@ DSH.Translate = (() => {
 						}
 						else if (evt.type === 'error') {
 							status.remove();
+							button.classList.remove('running');
 							const err = doc.createElement('div');
 							err.className = 'dsh-error';
 							err.textContent = `翻译失败：${evt.message ?? ''}`;
@@ -409,7 +488,15 @@ DSH.Translate = (() => {
 					},
 					{ thinking: thinkingRequested, model: translateModel }
 				);
-				active.set(readerKey, { stop, root: section });
+				if (entry.gen !== gen) {
+					// Another run() superseded this one while it was starting.
+					try { stop(); } catch (e) { /* already stopped */ }
+					return;
+				}
+				entry.stop = stop;
+				if (entry.cancelled) {
+					try { stop(); } catch (e) { /* already stopped */ }
+				}
 			};
 			void start();
 		};
@@ -420,6 +507,7 @@ DSH.Translate = (() => {
 		row.style.alignItems = 'center';
 		row.appendChild(button);
 		row.appendChild(auto);
+		row.appendChild(ask);
 		root.appendChild(row);
 		root.appendChild(section);
 		append(root);
@@ -432,14 +520,19 @@ DSH.Translate = (() => {
 			wrap.style.paddingTop = '0';
 			wrap.style.paddingBottom = '0';
 		}
-		active.set(readerKey, { root: section });
-
-		// Auto mode fires immediately on every new selection — including a cold
-		// start. run()/start() boot the sidecar via ensureStarted() when needed
-		// (with an inline "正在唤起 dsh 服务…" hint), so the user no longer has
-		// to click 译 once just to wake it. Repeated selections are guarded by
-		// abortActive(readerKey) at the top of onRenderTextSelectionPopup.
-		if (DSH.Util.prefGet('translateAuto', false)) {
+		if (resumed) {
+			// React rebuilt the .selection-popup ancestor — re-apply the width
+			// ladder to the NEW popup and re-fit; the live (or finished)
+			// translation section above keeps its content.
+			applyWidth(width);
+			scheduleFit();
+		}
+		else if (DSH.Util.prefGet('translateAuto', false)) {
+			// Auto mode fires immediately on every new selection — including a
+			// cold start. run()/start() boot the sidecar via ensureStarted()
+			// when needed (with an inline "正在唤起 dsh 服务…" hint). Re-renders
+			// of the same selection are handled by the resume path above and
+			// never restart the request.
 			run();
 		}
 	}

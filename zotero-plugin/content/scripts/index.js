@@ -209,6 +209,28 @@ Zotero.DSHinZotero = {
 	pickFolder(win, title) {
 		return DSH.Sidecar.pickFolder(win, title);
 	},
+	/** Open the wish/bugfix session (settings pane's 「新功能许愿 / bug 修复」
+	 * button): a fresh dsh session whose opening briefing points the agent at
+	 * this plugin's own repo (ask what the user wants → implement → offer a
+	 * PR). Surfaced as the floating panel over the main window. */
+	async openWishSession() {
+		const warm = DSH.Sidecar.isReady();
+		const progress = warm ? null : DSH.Util.toast('DSH', DSH.Sidecar.withColdHint('正在启动 dsh…'));
+		try {
+			await DSH.Sidecar.ensureStarted({ onStatus: (s) => progress?.update(s) });
+			const result = await DSH.Sidecar.plugin('task.wish', {});
+			progress?.done('DSH 就绪');
+			await DSH.SessionWindow.openOnSession(result.sessionId, { title: result.title });
+			// The settings pane is its own window — raise the main window so the
+			// floating panel it just opened is actually in front of the user.
+			Zotero.getMainWindow()?.focus();
+		}
+		catch (e) {
+			DSH.Util.log('openWishSession failed', e);
+			progress?.error(`打开失败：${e.message}`);
+			if (!progress) DSH.Util.toast('DSH', `打开许愿会话失败：${e.message}`);
+		}
+	},
 	/** Remove the configured local dsh package dir (and its reference). */
 	uninstallCustomDir() {
 		return DSH.Sidecar.removeCustomDir();

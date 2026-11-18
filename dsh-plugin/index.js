@@ -14,7 +14,7 @@ import {
   createInstanceState, createSession, resolveAlive,
   listSessions, archiveSessions, sendPrompt, workspaceDir,
 } from './src/sessions.js'
-import { zoteroGuidance, refetchTaskMessage } from './src/prompts.js'
+import { zoteroGuidance, refetchTaskMessage, wishTaskMessage } from './src/prompts.js'
 
 export const name = 'dsh-in-zotero-bridge'
 export { version }
@@ -151,14 +151,36 @@ export function apply(ctx, config = {}) {
         title: results[0].title,
       }
     },
+		// The settings pane's 「新功能许愿 / bug 修复」 button: ONE fresh
+		// interactive session pre-loaded with a briefing that carries this
+		// plugin's own repo URL — the agent's first reply is the question
+		// "what do you want?", not a guessed implementation.
+		'task.wish': async () => {
+			const title = '功能许愿 · dsh-in-zotero'
+			const sessionId = await createSession(ctx, { title })
+			await sendPrompt(ctx, sessionId, wishTaskMessage())
+			return { ok: true, sessionId, title }
+		},
 		'chat.context': async (payload) => {
 			// The Zotero session window pushes this whenever the current session
-			// changes (open, new session, tab following). Keyed by session id so
-			// the guidance of each conversation reflects what the user was
-			// looking at while THAT conversation was current.
+			// changes (open, new session, tab following, collection tree moves).
+			// Keyed by session id so the guidance of each conversation reflects
+			// what the user was looking at while THAT conversation was current.
 			const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : null
 			if (!sessionId) return { ok: true }
 			const meta = payload?.itemMeta && typeof payload.itemMeta === 'object' ? payload.itemMeta : {}
+			// Where the collection tree points (the category the user is
+			// browsing): type + id + display path. Task relevance to it is the
+			// agent's call — the guidance says so explicitly.
+			const rawCollection = payload?.collection && typeof payload.collection === 'object' ? payload.collection : undefined
+			const collection = rawCollection
+				? {
+						type: typeof rawCollection.type === 'string' ? rawCollection.type : undefined,
+						id: Number.isInteger(rawCollection.id) ? rawCollection.id : undefined,
+						name: typeof rawCollection.name === 'string' ? rawCollection.name.slice(0, 200) : undefined,
+						path: typeof rawCollection.path === 'string' ? rawCollection.path.slice(0, 200) : undefined,
+					}
+				: undefined
 			state.patchSessionContext(sessionId, {
 				mode: ['list', 'item', 'reader'].includes(payload?.mode) ? payload.mode : 'list',
 				itemID: Number.isInteger(payload?.itemID) ? payload.itemID : undefined,
@@ -170,6 +192,7 @@ export function apply(ctx, config = {}) {
 				date: typeof meta.date === 'string' ? meta.date : undefined,
 				DOI: typeof meta.DOI === 'string' ? meta.DOI : undefined,
 				abstract: typeof meta.abstract === 'string' ? meta.abstract : undefined,
+				collection,
 			})
 			return { ok: true }
 		},
@@ -177,11 +200,23 @@ export function apply(ctx, config = {}) {
 
 	// --- embedded-UI state reporting (posted by the client half every 2s;
 	//     polled by the Zotero side for new-session detection) -------------------
-	let uiState = { sessionIds: [], lastNav: null, at: 0 }
+	let uiState = { sessionIds: [], lastNav: null, lastAsk: null, at: 0 }
 	handlers['ui.report'] = async (payload) => {
 		uiState = {
 			sessionIds: Array.isArray(payload?.sessionIds) ? payload.sessionIds.map(String) : [],
 			lastNav: typeof payload?.lastNav === 'string' ? payload.lastNav : null,
+			// 「问 AI」composer prefill receipt: nonce + whether the text was
+			// actually typed into the composer (Zotero side matches the nonce
+			// it put into the ask hash).
+			lastAsk: payload?.lastAsk && typeof payload.lastAsk === 'object'
+				? {
+						nonce: typeof payload.lastAsk.nonce === 'string' ? payload.lastAsk.nonce : null,
+						session: typeof payload.lastAsk.session === 'string' ? payload.lastAsk.session : null,
+						ok: payload.lastAsk.ok === true,
+						filledLen: Number.isInteger(payload.lastAsk.filledLen) ? payload.lastAsk.filledLen : null,
+						composer: typeof payload.lastAsk.composer === 'string' ? payload.lastAsk.composer.slice(0, 200) : null,
+					}
+				: null,
 			at: Date.now(),
 		}
 		return { ok: true }

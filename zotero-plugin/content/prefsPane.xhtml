@@ -8,6 +8,34 @@
      fills the detected source info, and wires the restart button. -->
 <vbox class="main-section">
 	<groupbox>
+		<label><html:h2>划词翻译</html:h2></label>
+		<vbox align="start">
+			<checkbox label="在阅读器划词弹窗中显示「译」按钮"
+				preference="extensions.zotero.dsh-in-zotero.translateEnabled"/>
+			<checkbox label="划选后自动翻译（dsh 未运行时会自动唤起）"
+				preference="extensions.zotero.dsh-in-zotero.translateAuto"/>
+			<checkbox label="使用深度思考模式翻译（若当前模型支持）"
+				preference="extensions.zotero.dsh-in-zotero.translateThinking"/>
+		</vbox>
+		<hbox align="center">
+			<label control="dsh-translate-model" value="翻译模型："/>
+			<menulist id="dsh-translate-model" flex="1" style="max-width: 420px;">
+				<menupopup id="dsh-translate-model-popup">
+					<menuitem value="" label="继承 dsh 当前使用的模型"/>
+				</menupopup>
+			</menulist>
+			<button id="dsh-translate-model-refresh" label="刷新列表"/>
+		</hbox>
+		<label class="dsh-hint" id="dsh-translate-model-hint">默认继承 dsh 当前使用的模型；点「刷新列表」（需 dsh 服务已启动）可加载 dsh 中已注册的全部模型后手动指定。</label>
+	</groupbox>
+
+	<groupbox>
+		<label><html:h2>新功能许愿 / bug 修复</html:h2></label>
+		<label class="dsh-hint">想给本插件加新功能，或遇到了 bug？点下方按钮打开 DSH 悬浮窗，直接对 AI 描述需求：它会克隆本插件源码、动手实现或修复，改完还会问你要不要向仓库提交 PR。</label>
+		<button id="dsh-wish-button" label="许愿新功能 / 修复 bug（打开 DSH 对话）"/>
+	</groupbox>
+
+	<groupbox>
 		<label><html:h2>dsh 来源</html:h2></label>
 		<label class="dsh-hint" id="dsh-source-detected">正在检测本机 dsh 环境…</label>
 
@@ -96,28 +124,6 @@
 			<button id="dsh-cleanup-custom" label="删除本地 dsh 包目录" disabled="true"/>
 			<label class="dsh-hint" id="dsh-cleanup-custom-hint">这是你自己指定的目录，插件不替你做主：勾选确认后才会删除。若路径含 node_modules（npm 安装），也可改用 npm uninstall -g @deepseek-ai/dsh。</label>
 		</vbox>
-	</groupbox>
-
-	<groupbox>
-		<label><html:h2>划词翻译</html:h2></label>
-		<vbox align="start">
-			<checkbox label="在阅读器划词弹窗中显示「译」按钮"
-				preference="extensions.zotero.dsh-in-zotero.translateEnabled"/>
-			<checkbox label="划选后自动翻译（dsh 未运行时会自动唤起）"
-				preference="extensions.zotero.dsh-in-zotero.translateAuto"/>
-			<checkbox label="使用深度思考模式翻译（若当前模型支持）"
-				preference="extensions.zotero.dsh-in-zotero.translateThinking"/>
-		</vbox>
-		<hbox align="center">
-			<label control="dsh-translate-model" value="翻译模型："/>
-			<menulist id="dsh-translate-model" flex="1" style="max-width: 420px;">
-				<menupopup id="dsh-translate-model-popup">
-					<menuitem value="" label="继承 dsh 当前使用的模型"/>
-				</menupopup>
-			</menulist>
-			<button id="dsh-translate-model-refresh" label="刷新列表"/>
-		</hbox>
-		<label class="dsh-hint" id="dsh-translate-model-hint">默认继承 dsh 当前使用的模型；点「刷新列表」（需 dsh 服务已启动）可加载 dsh 中已注册的全部模型后手动指定。</label>
 	</groupbox>
 
 	<groupbox>

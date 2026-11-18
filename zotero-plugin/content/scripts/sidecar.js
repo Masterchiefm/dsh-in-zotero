@@ -105,34 +105,111 @@ DSH.Sidecar = (() => {
 
 	// --- dsh desktop detection --------------------------------------------------
 
+	/** Registry string read that tolerates a missing value — real Uninstall
+	 * hives carry plenty of valueless subkeys, and one of them must never abort
+	 * the enumeration (the pre-0.1.10 sweep had a bare try/finally around the
+	 * DisplayName read: the first valueless key killed the rest of the root). */
+	function regString(key, name) {
+		try { return String(key.readStringValue(name) ?? ''); }
+		catch (e) { return ''; }
+	}
+
+	/** Collect DeepSeek exe candidates from the Windows uninstall hive.
+	 *
+	 * PITFALL: nsIWindowsRegKey.open() is a VOID method in the IDL — it opens
+	 * the receiver in place and returns nothing. `key = rk.open(...)` stores
+	 * `undefined` and the very next `key.childCount` throws, which the outer
+	 * catch swallowed as one log line — the registry channel was dead code on
+	 * EVERY machine (0.1.9 symptom: custom-location installs such as
+	 * D:\Programs\dsh went undetected even with a perfect HKCU entry).
+	 * Statement-style open + use of the receiver itself, matching Zotero's own
+	 * WindowsLaunchOnLogin.sys.mjs. */
+	function registryDesktopCandidates(out, exeName) {
+		const Ci = Components.interfaces;
+		const UNINSTALL = 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall';
+		// electron-builder's NSIS uninstaller is a 32-bit process: its
+		// per-machine entries land in the WOW64 view, which 64-bit Zotero does
+		// not see in the native HKLM view.
+		const roots = [
+			[Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER, UNINSTALL],
+			[Ci.nsIWindowsRegKey.ROOT_KEY_LOCAL_MACHINE, UNINSTALL],
+			[Ci.nsIWindowsRegKey.ROOT_KEY_LOCAL_MACHINE,
+				'Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall'],
+		];
+		let scanned = 0;
+		for (const [root, path] of roots) {
+			const rk = Components.classes['@mozilla.org/windows-registry-key;1']
+				.createInstance(Ci.nsIWindowsRegKey);
+			try {
+				rk.open(root, path, rk.ACCESS_READ); // void — opens rk itself
+			}
+			catch (e) {
+				continue; // root absent (e.g. no per-machine install)
+			}
+			try {
+				const count = rk.childCount;
+				for (let i = 0; i < count; i++) {
+					let name = '';
+					let child = null;
+					try { name = rk.getChildName(i); }
+					catch (e) { continue; }
+					try { child = rk.openChild(name, rk.ACCESS_READ); }
+					catch (e) { continue; }
+					try {
+						scanned++;
+						const display = regString(child, 'DisplayName');
+						const uninstallStr = regString(child, 'UninstallString');
+						if (!/deepseek/i.test(display) && !/deepseek/i.test(uninstallStr) && !/deepseek/i.test(name)) continue;
+						const loc = regString(child, 'InstallLocation');
+						if (loc) {
+							out.push({ path: DSH.Util.joinPath(loc, exeName), origin: 'registry' });
+							continue;
+						}
+						// UninstallString is usually "<dir>\Uninstall <name>.exe" —
+						// take the quoted path's parent dir.
+						const m = /^"([^"]+Uninstall[^"]*)"/i.exec(uninstallStr.trim()) || /^(\S+Uninstall\S*)/i.exec(uninstallStr.trim());
+						if (m) out.push({ path: DSH.Util.joinPath(PathUtils.parent(m[1]), exeName), origin: 'registry' });
+					}
+					finally { try { child.close(); } catch (e) { /* already closed */ } }
+				}
+			}
+			finally { try { rk.close(); } catch (e) { /* already closed */ } }
+		}
+		return scanned;
+	}
+
 	/** Locate the installed dsh desktop app (DeepSeek Harness). Candidates, in
 	 * order: the user-specified desktop dir (pref desktopDir — the manual
 	 * fallback for installs no detection can see), the per-user install dir,
 	 * %ProgramFiles%, registry uninstall entries (matched loosely on "deepseek"
 	 * and also deriving a dir from UninstallString — covers custom installs),
-	 * and PATH on Windows; /Applications on macOS. */
+	 * and PATH on Windows; /Applications on macOS. Returns { exe, dir, origin }
+	 * or null; the candidate list is kept in lastDetect for debug.detect. */
+	let lastDetect = null;
+
 	async function findDesktopInstall() {
 		const exeName = 'DeepSeek Harness.exe';
 		const candidates = [];
 		// Manual override first — a user who pointed us at the dir wins over
 		// anything automatic.
 		const manual = String(prefGet('desktopDir', '') || '').trim();
-		if (manual) candidates.push(DSH.Util.joinPath(manual, exeName));
+		if (manual) candidates.push({ path: DSH.Util.joinPath(manual, exeName), origin: 'manual' });
+		let registryScanned = 0;
 		if (Zotero.isWin) {
 			try {
 				const local = Services.dirsvc.get('LocalAppData', Components.interfaces.nsIFile).path;
-				candidates.push(DSH.Util.joinPath(local, 'Programs', 'DeepSeek Harness', exeName));
+				candidates.push({ path: DSH.Util.joinPath(local, 'Programs', 'DeepSeek Harness', exeName), origin: 'default' });
 			}
 			catch (e) {
 				const home = DSH.Util.homeDir();
-				candidates.push(DSH.Util.joinPath(home, 'AppData', 'Local', 'Programs', 'DeepSeek Harness', exeName));
+				candidates.push({ path: DSH.Util.joinPath(home, 'AppData', 'Local', 'Programs', 'DeepSeek Harness', exeName), origin: 'default' });
 			}
 			try {
 				for (const key of ['ProgFiles', 'ProgFiles86']) {
 					let dir;
 					try { dir = Services.dirsvc.get(key, Components.interfaces.nsIFile).path; }
 					catch (e) { continue; }
-					candidates.push(DSH.Util.joinPath(dir, 'DeepSeek Harness', exeName));
+					candidates.push({ path: DSH.Util.joinPath(dir, 'DeepSeek Harness', exeName), origin: 'default' });
 				}
 			}
 			catch (e) { /* Program Files probes are best-effort */ }
@@ -142,38 +219,9 @@ DSH.Sidecar = (() => {
 			// misses real installs. UninstallString also yields a dir when
 			// InstallLocation is absent.
 			try {
-				const rk = Components.classes['@mozilla.org/windows-registry-key;1']
-					.createInstance(Components.interfaces.nsIWindowsRegKey);
-				for (const root of [rk.ROOT_KEY_CURRENT_USER, rk.ROOT_KEY_LOCAL_MACHINE]) {
-					let key;
-					try {
-						key = rk.open(root, 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall', rk.ACCESS_READ);
-					}
-					catch (e) { continue; }
-					for (let i = 0; i < key.childCount; i++) {
-						let child;
-						try { child = key.openChild(key.getChildName(i), rk.ACCESS_READ); }
-						catch (e) { continue; }
-						try {
-							const name = child.readStringValue('DisplayName') ?? '';
-							let uninstallStr = '';
-							try { uninstallStr = child.readStringValue('UninstallString') ?? ''; } catch (e) { /* absent */ }
-							if (!/deepseek/i.test(name) && !/deepseek/i.test(uninstallStr) && !/deepseek/i.test(key.getChildName(i))) continue;
-							let loc = '';
-							try { loc = child.readStringValue('InstallLocation') ?? ''; } catch (e) { /* absent */ }
-							if (loc) {
-								candidates.push(DSH.Util.joinPath(loc, exeName));
-								continue;
-							}
-							// UninstallString is usually "<dir>\Uninstall <name>.exe" —
-							// take the quoted path's parent dir.
-							const m = /^"([^"]+Uninstall[^"]*)"/i.exec(uninstallStr.trim()) || /^(\S+Uninstall\S*)/i.exec(uninstallStr.trim());
-							if (m) candidates.push(DSH.Util.joinPath(PathUtils.parent(m[1]), exeName));
-						}
-						finally { try { child.close(); } catch (e) { /* already closed */ } }
-					}
-					try { key.close(); } catch (e) { /* already closed */ }
-				}
+				registryScanned = registryDesktopCandidates(candidates, exeName);
+				const hits = candidates.filter((c) => c.origin === 'registry').length;
+				log(`registry sweep: ${registryScanned} uninstall entries scanned, ${hits} deepseek candidate(s)`);
 			}
 			catch (e) {
 				log('registry desktop sweep failed', e?.message ?? e);
@@ -181,36 +229,139 @@ DSH.Sidecar = (() => {
 			// PATH: a portable copy dropped on PATH is invisible to the registry.
 			try {
 				const onPath = await Subprocess.pathSearch(exeName);
-				if (onPath) candidates.push(onPath);
+				if (onPath) candidates.push({ path: onPath, origin: 'path' });
 			}
 			catch (e) { /* not on PATH */ }
 		}
 		else {
-			candidates.push('/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness');
+			candidates.push({ path: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', origin: 'default' });
 		}
-		for (const candidate of [...new Set(candidates)]) {
-			if (candidate && await DSH.Util.pathExists(candidate)) {
-				return { exe: candidate, dir: PathUtils.parent(candidate) };
+		const seen = new Set();
+		const ordered = [];
+		for (const candidate of candidates) {
+			if (!candidate.path || seen.has(candidate.path)) continue;
+			seen.add(candidate.path);
+			ordered.push(candidate);
+		}
+		let chosen = null;
+		for (const candidate of ordered) {
+			if (await DSH.Util.pathExists(candidate.path)) {
+				chosen = { exe: candidate.path, dir: PathUtils.parent(candidate.path), origin: candidate.origin };
+				break;
+			}
+		}
+		lastDetect = { registryScanned, candidates: ordered, chosen };
+		return chosen;
+	}
+
+	// --- desktop engine (inside app.asar) ---------------------------------------
+
+	// One-entry cache: the asar header is ~6 MB of JSON and both sourceInfo
+	// and the start chain may probe it within seconds of each other.
+	let asarCache = { key: '', files: null };
+
+	/** Parse an asar archive's header (a JSON directory tree) without Electron.
+	 * Layout: u32@0 = 4 (outer pickle size), u32@4 = header size, u32@8 =
+	 * payload size, u32@12 = JSON length, JSON text starts at byte 16 (laid
+	 * bare by probing the 0.2.2-rc.1 archive; string-grepping the raw header
+	 * is unreliable — key order inside the JSON is arbitrary). Returns the
+	 * root {files:{…}} tree, or null for unreadable/unknown layouts (never
+	 * throws). */
+	async function asarFiles(asarPath) {
+		try {
+			const stat = await IOUtils.stat(asarPath);
+			const key = `${asarPath}:${stat.size}:${stat.lastModified}`;
+			if (asarCache.key === key) return asarCache.files;
+			const head = new DataView((await IOUtils.read(asarPath, { maxBytes: 16 })).buffer);
+			const jsonLen = head.getUint32(12, true);
+			// Sanity guards against a corrupt or wildly different archive
+			// format — treat as "unknown layout", not an error.
+			if (head.getUint32(0, true) !== 4 || jsonLen < 2 || jsonLen > 64 * 1024 * 1024) return null;
+			const bytes = await IOUtils.read(asarPath, { maxBytes: 16 + jsonLen });
+			const tree = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + jsonLen)));
+			if (!tree?.files) return null; // not an asar-shaped header
+			asarCache = { key, files: tree };
+			return tree;
+		}
+		catch (e) {
+			log('asar header parse failed', e?.message ?? e);
+			return null;
+		}
+	}
+
+	/** Does the parsed archive tree contain this inner file? */
+	function asarHas(files, innerPath) {
+		let node = files;
+		for (const segment of String(innerPath).split('/')) {
+			if (!segment) continue;
+			node = node?.files?.[segment];
+			if (!node) return false;
+		}
+		return !!node;
+	}
+
+	/** Engine layouts we can run inside a desktop install, in preference
+	 * order. `asar:` entries are verified against the parsed archive header;
+	 * `dir:` entries must exist on the real filesystem (unpacked builds). */
+	const DESKTOP_ENGINE_LAYOUTS = [
+		{ via: 'asar', inner: 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js' },
+		{ via: 'asar', inner: 'node_modules/@deepseek-ai/dsh/lib/bin.js' },
+		{ via: 'dir', rel: 'resources/app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js' },
+		{ via: 'dir', rel: 'resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js' },
+	];
+
+	/** Resolve the dsh core's bin.js inside the desktop install's app.asar.
+	 * The asar is NOT a real directory — IOUtils.exists is meaningless for
+	 * inner paths — so the header is parsed and the tree walked instead.
+	 * Returns { bin, via } or null when this desktop build bundles no engine
+	 * we know: auto mode then falls through to the bundled runtime instead of
+	 * dying at spawn with a cryptic "dsh 进程提前退出". The returned
+	 * <asar>\<inner> path form is what Electron itself accepts as a module
+	 * path under ELECTRON_RUN_AS_NODE=1 (the desktop's own Host child works
+	 * exactly this way). */
+	async function desktopEngine(desktop) {
+		if (!desktop) return null;
+		const asarPath = DSH.Util.joinPath(desktop.dir, 'resources', 'app.asar');
+		let files = null;
+		if (await DSH.Util.pathExists(asarPath)) files = await asarFiles(asarPath);
+		for (const layout of DESKTOP_ENGINE_LAYOUTS) {
+			if (layout.via === 'asar') {
+				if (files && asarHas(files, layout.inner)) {
+					return { bin: DSH.Util.joinPath(asarPath, layout.inner), via: 'asar' };
+				}
+			}
+			else if (await DSH.Util.pathExists(DSH.Util.joinPath(desktop.dir, layout.rel))) {
+				return { bin: DSH.Util.joinPath(desktop.dir, layout.rel), via: 'dir' };
 			}
 		}
 		return null;
 	}
 
-	/** The dsh core's bin.js inside the desktop install's app.asar. The asar
-	 * is Electron-readable; spawn the desktop exe with ELECTRON_RUN_AS_NODE=1
-	 * (the desktop's own Host child works exactly this way). */
-	function desktopBinJs(desktop) {
-		return DSH.Util.joinPath(desktop.dir, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-	}
-
 	/** Combined detection snapshot for the settings pane / diagnostics. */
 	async function sourceInfo() {
 		const desktop = await findDesktopInstall();
+		const engine = desktop ? await desktopEngine(desktop) : null;
 		return {
 			mode: dshMode(),
 			resolvedMode: state.resolvedMode,
-			desktop: desktop ? { exe: desktop.exe, dir: desktop.dir, binJs: desktopBinJs(desktop) } : null,
+			desktop: desktop
+				? { exe: desktop.exe, dir: desktop.dir, origin: desktop.origin, binJs: engine?.bin ?? null, engineVia: engine?.via ?? null, engineOk: !!engine }
+				: null,
 			bundledReady: await DSH.Util.pathExists(dshBinJsFor('bundled')),
+		};
+	}
+
+	/** Full detection internals for the debug.detect endpoint — the remote
+	 * diagnosis tool for "检测不到 dsh" reports on other machines. */
+	async function detectionReport() {
+		const info = await sourceInfo();
+		let node = null;
+		try { node = await nodePath(); }
+		catch (e) { node = `NOT FOUND: ${e?.message ?? e}`; }
+		return {
+			...info,
+			node,
+			detect: lastDetect,
 		};
 	}
 
@@ -242,6 +393,22 @@ DSH.Sidecar = (() => {
 		return token;
 	}
 
+	/** Enumerate the dsh desktop's managed runtime tool dirs:
+	 * ~/.dsh/dsh-runtimes/<name>/dependencies/<tool>… (node, pnpm, python). */
+	async function runtimeToolPaths(tool, leaf) {
+		const out = [];
+		if (!Zotero.isWin) return out;
+		try {
+			const runtimes = DSH.Util.joinPath(dshHome(), 'dsh-runtimes');
+			for (const entry of await IOUtils.getChildren(runtimes)) {
+				const path = DSH.Util.joinPath(entry, 'dependencies', tool, ...leaf);
+				if (await DSH.Util.pathExists(path)) out.push(path);
+			}
+		}
+		catch (e) { /* no dsh-runtimes (desktop not installed / never run) */ }
+		return out;
+	}
+
 	async function nodePath() {
 		const override = String(prefGet('nodePath', '') || '').trim();
 		if (override) return override;
@@ -257,6 +424,12 @@ DSH.Sidecar = (() => {
 			: ['/usr/local/bin/node', '/usr/bin/node', '/opt/homebrew/bin/node'];
 		for (const candidate of candidates) {
 			if (await DSH.Util.pathExists(candidate)) return candidate;
+		}
+		// The dsh desktop's managed runtime ships a full node (no npm — its
+		// toolchain is pnpm) under ~/.dsh/dsh-runtimes; good enough to RUN dsh
+		// on machines with no system Node at all.
+		for (const managed of await runtimeToolPaths('node', ['bin', 'node.exe'])) {
+			return managed;
 		}
 		throw new Error('找不到 Node.js（dsh 需要 Node ≥ 24.9）。请在关于插件设置中填写 node.exe 路径，或安装 Node.js。');
 	}
@@ -336,16 +509,22 @@ DSH.Sidecar = (() => {
 		// an already-running sidecar (only the cold-start path owns that flag).
 		if (!manual) setPhase('installing');
 		const version = String(prefGet('dshPackageVersion', '') || 'latest');
-		const args = ['install', '--no-audit', '--no-fund', '--loglevel=error',
-			`@deepseek-ai/dsh@${version}`, '--prefix', runtimeDir()];
+		const pkg = `@deepseek-ai/dsh@${version}`;
+		// npm: "npm-cli.js install pkg --prefix dir"; pnpm (the dsh desktop's
+		// managed toolchain) has no --prefix — --dir pins the install root, and
+		// its symlinked node_modules is fine (pathExists and node both follow).
+		const pm = await packageManagerFor(node);
+		const args = pm.tool === 'pnpm'
+			? [pm.cli, '--dir', runtimeDir(), 'add', pkg]
+			: [pm.cli, 'install', '--no-audit', '--no-fund', '--loglevel=error', pkg, '--prefix', runtimeDir()];
 		const registry = String(prefGet('npmRegistry', '') || '').trim();
 		if (registry) args.push(`--registry=${registry}`);
-		log(`installing dsh runtime: npm ${args.join(' ')}`);
+		log(`installing dsh runtime: node ${args.join(' ')}`);
 		await DSH.Util.writeTextFile(DSH.Util.joinPath(runtimeDir(), 'package.json'),
-			JSON.stringify({ name: 'dsh-in-zotero-runtime', private: true }, null, 2));
+			JSON.stringify({ name: 'dsh-in-zotero_runtime', private: true }, null, 2));
 		const proc = await Subprocess.call({
 			command: node,
-			arguments: [await npmCliPath(node), ...args],
+			arguments: args,
 			environment: appendEnv({}),
 			environmentAppend: true,
 			stderr: 'pipe',
@@ -365,16 +544,26 @@ DSH.Sidecar = (() => {
 		log('dsh runtime installed');
 	}
 
-	/** Locate npm-cli.js next to node.exe (npm ships inside the Node install). */
-	function require_npm_cli(node) {
+	/** The install tool for the bundled runtime: npm-cli.js next to node
+	 * (standard Node installs), or the pnpm that ships with the dsh desktop's
+	 * managed runtime when node is the npm-less managed build. */
+	async function packageManagerFor(node) {
 		const npmCli = DSH.Util.joinPath(PathUtils.parent(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-		return npmCli;
-	}
-
-	async function npmCliPath(node) {
-		const npmCli = require_npm_cli(node);
-		if (await DSH.Util.pathExists(npmCli)) return npmCli;
-		throw new Error(`找不到 npm（${npmCli}）。请确认 Node.js 安装完整。`);
+		if (await DSH.Util.pathExists(npmCli)) return { tool: 'npm', cli: npmCli };
+		// Sibling of the managed node first (<runtime>/dependencies/pnpm),
+		// then any runtime's pnpm.
+		try {
+			// node.exe lives at <runtime>/dependencies/node/bin/node.exe — three
+			// levels up is the shared dependencies dir.
+			const deps = PathUtils.parent(PathUtils.parent(PathUtils.parent(node)));
+			const sibling = DSH.Util.joinPath(deps, 'pnpm', 'pnpm.cjs');
+			if (await DSH.Util.pathExists(sibling)) return { tool: 'pnpm', cli: sibling };
+		}
+		catch (e) { /* node not under a runtime layout */ }
+		for (const pnpm of await runtimeToolPaths('pnpm', ['pnpm.cjs'])) {
+			return { tool: 'pnpm', cli: pnpm };
+		}
+		throw new Error(`找不到 npm（${npmCli}）或 pnpm。请安装完整版 Node.js（自带 npm），或在设置中指定本机 node.exe 路径。`);
 	}
 
 	function appendEnv(extra) {
@@ -441,8 +630,10 @@ DSH.Sidecar = (() => {
 	/** Resolve the effective source when dshMode is 'auto': a configured local
 	 * dsh package dir (the strongest signal — an explicitly filled dir wins
 	 * over detection; an invalid/removed dir falls through) → desktop install
-	 * → already-installed bundled runtime → ask the user (whose pick persists:
-	 * the dir for the custom choice, the mode for bundled/attach). */
+	 * (with a verified engine inside its app.asar) → already-installed bundled
+	 * runtime → ask the user (whose pick persists: the dir for the custom
+	 * choice, the mode for bundled/attach). A desktop without a usable engine
+	 * (unknown asar layout) falls through instead of failing at spawn. */
 	async function resolveAutoMode(onStatus) {
 		if (customDshDir() && (await DSH.Util.pathExists(dshBinJsFor('custom')))) {
 			log(`auto: using configured local dsh package at ${customDshDir()}`);
@@ -451,14 +642,18 @@ DSH.Sidecar = (() => {
 		const desktop = await findDesktopInstall();
 		if (desktop) {
 			state.desktopPath = desktop.exe;
-			log(`auto: desktop dsh detected at ${desktop.exe}`);
-			return 'desktop';
+			const engine = await desktopEngine(desktop);
+			if (engine) {
+				log(`auto: desktop dsh detected at ${desktop.exe} (engine via ${engine.via}: ${engine.bin})`);
+				return 'desktop';
+			}
+			log(`auto: desktop found at ${desktop.exe} but no dsh engine inside its app.asar — falling through`);
 		}
 		if (await DSH.Util.pathExists(dshBinJsFor('bundled'))) {
-			log('auto: no desktop dsh, bundled runtime already installed');
+			log('auto: no usable desktop dsh, bundled runtime already installed');
 			return 'bundled';
 		}
-		onStatus?.('未检测到 dsh 桌面版，需要你选择一次来源…');
+		onStatus?.(desktop ? '检测到 dsh 桌面版但未找到其内置内核，需要选择其他来源…' : '未检测到 dsh 桌面版，需要你选择一次来源…');
 		const choice = await promptSourceChoice();
 		if (!choice) {
 			throw new Error('未选择 dsh 来源。可在 Zotero 设置 → dsh-in-zotero 中随时配置。');
@@ -663,8 +858,10 @@ DSH.Sidecar = (() => {
 				}
 				else if (mode === 'desktop') {
 					const desktop = await findDesktopInstall();
-					const bin = desktopBinJs(desktop);
-					log(`desktop engine: ${desktop.exe} -> ${bin}`);
+					if (!desktop) throw new Error('未找到 dsh 桌面版安装目录。请在设置 → dsh-in-zotero 填写桌面版目录，或改用 npm 内置运行时。');
+					const engine = await desktopEngine(desktop);
+					if (!engine) throw new Error(`dsh 桌面版（${desktop.dir}）内未找到 dsh 内核（app.asar 布局可能已变化）。请改用「npm 内置运行时」，或在设置中指定本机 dsh 包目录。`);
+					log(`desktop engine: ${desktop.exe} -> ${engine.bin} (${engine.via})`);
 				}
 				else {
 					await step('ensureRuntime', () => ensureRuntime(status));
@@ -714,11 +911,12 @@ DSH.Sidecar = (() => {
 		return spawnDshProcess(async () => {
 			const desktop = await findDesktopInstall();
 			if (!desktop) throw new Error('未找到 dsh 桌面版安装目录');
-			const bin = desktopBinJs(desktop);
+			const engine = await desktopEngine(desktop);
+			if (!engine) throw new Error(`dsh 桌面版（${desktop.dir}）内未找到 dsh 内核（app.asar 布局可能已变化）`);
 			const port = Number(prefGet('port', 0) || 0);
 			return {
 				command: desktop.exe,
-				args: [bin, '--profile', profileName(), '--no-open', '--port', String(port)],
+				args: [engine.bin, '--profile', profileName(), '--no-open', '--port', String(port)],
 				envExtra: { ELECTRON_RUN_AS_NODE: '1' },
 			};
 		}, onStatus);
@@ -1297,14 +1495,17 @@ DSH.Sidecar = (() => {
 		const mode = dshMode();
 		if (mode === 'attach') return !!String(prefGet('attachUrl', '') || '').trim();
 		if (mode === 'bundled') return await DSH.Util.pathExists(dshBinJsFor('bundled'));
-		// auto: configured custom dir → desktop install → bundled runtime.
+		// auto: configured custom dir → desktop install (engine verified —
+		// a desktop without a usable engine must not count as ready, the
+		// pre-warm would just die at spawn) → bundled runtime.
 		if (customDshDir() && await DSH.Util.pathExists(dshBinJsFor('custom'))) return true;
-		if (await findDesktopInstall()) return true;
+		const desktop = await findDesktopInstall();
+		if (desktop && (await desktopEngine(desktop))) return true;
 		return await DSH.Util.pathExists(dshBinJsFor('bundled'));
 	}
 
 	return {
-		state, getPhase, isReady, onStateChange, dshMode, sourceInfo,
+		state, getPhase, isReady, onStateChange, dshMode, sourceInfo, detectionReport,
 		dataDir, pluginDir, runtimeDir, dshHome, profileName, bridgeToken,
 		nodePath, ensureStarted, ensureRuntime, seedPlugin, seedProfile,
 		connectAuth, rpc, plugin, pluginRaw, translateStream, stop, listModels,

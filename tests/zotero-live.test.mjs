@@ -112,6 +112,59 @@ async function main() {
 
 	const attach = await call('attach', { id: itemID, url: 'https://example.com/dsh-in-zotero-test', title: '自检链接' })
 	check('attach linked URL', attach.body.ok === true)
+	const linkAttID = attach.body.attachment?.id
+
+	// --- locate（在文献列表中定位并高亮） ---------------------------------------
+	// The library tab is brought forward and the item is selected; the fresh
+	// row may still be mid-notify, so this also exercises the poll-then-select
+	// path inside the op.
+	const locate = await call('locate', { id: itemID })
+	check('locate selects the item in the list', locate.body.ok === true
+		&& locate.body.found !== false && locate.body.item?.id === itemID, locate.body.error?.message ?? '')
+
+	const locateAtt = await call('locate', { id: linkAttID })
+	check('locate attachment resolves to parent item', locateAtt.body.ok === true
+		&& locateAtt.body.item?.id === itemID && locateAtt.body.parentID === itemID, locateAtt.body.error?.message ?? '')
+
+	// --- standalone attachment → add with adoptAttachmentIDs -----------------
+	// The "PDF dragged into the library with no metadata" flow: import a file
+	// as a top-level attachment inside the test collection, then create its
+	// parent item, which adopts the attachment and inherits the collection.
+	const tmpFile = path.join(os.tmpdir(), `dsh-adopt-selftest-${Date.now()}.txt`)
+	fs.writeFileSync(tmpFile, 'dsh-in-zotero standalone adopt selftest\n')
+	const standalone = await call('attach', { standalone: true, path: tmpFile, collectionIDs: [collectionID] })
+	check('attach standalone file', standalone.body.ok === true, `id ${standalone.body.attachment?.id}`)
+	const standaloneID = standalone.body.attachment?.id
+
+	const adopted = await call('add', {
+		itemType: 'journalArticle',
+		fields: { title: `${marker} — adopted parent`, DOI: '10.0000/dsh-adopt.test' },
+		creators: [{ firstName: 'San', lastName: 'Zhang', creatorType: 'author' }],
+		adoptAttachmentIDs: [standaloneID],
+	})
+	check('add adopts standalone attachment', adopted.body.ok === true
+		&& (adopted.body.adoptedAttachments ?? []).some(a => a.id === standaloneID), `item id ${adopted.body.item?.id}`)
+	const adoptedID = adopted.body.item?.id
+
+	const adoptedDetail = await call('item', { id: adoptedID })
+	check('attachment re-parented under the new item', adoptedDetail.body.ok === true
+		&& adoptedDetail.body.item.attachments.some(a => a.id === standaloneID))
+	check('new item inherited the attachment collection', (adoptedDetail.body.item.collections ?? []).includes(collectionID))
+	const standaloneAfter = await call('item', { id: standaloneID })
+	check('attachment left its own collections', (standaloneAfter.body.item.collections ?? []).length === 0)
+
+	const reAdopt = await call('add', {
+		itemType: 'report',
+		fields: { title: `${marker} — should not exist` },
+		adoptAttachmentIDs: [standaloneID],
+	})
+	const junk = await call('search', { query: 'should not exist' })
+	check('re-adopt rejected (already parented), no junk item left', reAdopt.body.ok === false
+		&& junk.body.items.length === 0, reAdopt.body.error?.message ?? '')
+
+	const adoptedGone = await call('trash', { id: adoptedID, action: 'delete' })
+	check('delete adopted item tree', adoptedGone.body.ok === true)
+	fs.rmSync(tmpFile, { force: true })
 
 	const update = await call('update', {
 		id: itemID,

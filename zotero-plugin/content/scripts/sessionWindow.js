@@ -47,6 +47,7 @@ DSH.SessionWindow = (() => {
 		suppressFollow: false, // true while a host switch is rearranging tabs
 		followSeq: 0, // bump on every tab-follow — stale follows self-abandon
 		navSeq: 0, // bump on every navigateToSession — stale navigations abort
+		collectionSig: '', // last-pushed collection tree position (JSON sig)
 	};
 
 	// --- bindings -------------------------------------------------------------
@@ -78,6 +79,49 @@ DSH.SessionWindow = (() => {
 		}
 		catch (e) {
 			return '';
+		}
+	}
+
+	/** What the collection tree currently points at, as the user browses the
+	 * library tab — a category path for real collections ("A / B / 子分类"),
+	 * plus the view kind for library roots / saved searches / trash. Pushed
+	 * with the session context so the guidance knows WHERE the user is (the
+	 * next task may or may not target that category — the agent decides).
+	 * `collectionsView` is this Zotero's name for the tree; `collectionTree`
+	 * is the newer spelling — accept both. */
+	function collectionContext() {
+		try {
+			const win = state.window ?? Zotero.getMainWindow();
+			const pane = win?.ZoteroPane;
+			const tree = pane?.collectionTree ?? pane?.collectionsView;
+			if (!tree || typeof tree.getSelectedRows !== 'function') return undefined;
+			const row = tree.getSelectedRows()[0];
+			if (!row) return undefined;
+			const type = String(row.type ?? '');
+			const ref = row.ref;
+			if (type === 'collection' && ref?.id) {
+				const parts = [];
+				let col = ref;
+				for (let guard = 0; col?.id && guard < 32; guard++) {
+					parts.unshift(String(col.name ?? ''));
+					col = col.parentID ? Zotero.Collections.get(col.parentID) : null;
+				}
+				return { type: 'collection', id: ref.id, name: String(ref.name ?? ''), path: parts.join(' / ') };
+			}
+			if (type === 'search' && ref?.id) {
+				return { type: 'search', id: ref.id, name: String(ref.name ?? ''), path: String(ref.name ?? '') };
+			}
+			if (type === 'library' || type === 'group') {
+				let name = '';
+				try { name = String(Zotero.Libraries.getName(ref?.libraryID) ?? ''); } catch (e) { /* cosmetic */ }
+				return { type, name, path: name };
+			}
+			if (type === 'trash') return { type: 'trash', path: '回收站' };
+			if (type === 'feeds') return { type: 'feeds', path: '订阅源' };
+			return { type, path: '' };
+		}
+		catch (e) {
+			return undefined;
 		}
 	}
 
@@ -752,17 +796,28 @@ DSH.SessionWindow = (() => {
 		throw new Error('dsh 页面加载超时（嵌入式界面无响应）');
 	}
 
-	async function navigateToSession(sessionId) {
+	/**
+	 * Navigate the live page to a session; optionally prefill the composer
+	 * with `askText` WITHOUT sending (the「问 AI」flow): the hash carries
+	 * `&ask=<text>&n=<nonce>` and the embedded client half types it into the
+	 * composer after the session view mounts. Returns true on confirmation
+	 * (nav for plain switches, composer-typed for asks).
+	 */
+	async function navigateToSession(sessionId, { askText } = {}) {
 		if (!state.browser) return false;
 		if (degraded()) {
 			await ensurePageLoaded();
-			return true;
+			return false; // no client half → ask prefill impossible
 		}
+		const nonce = askText ? Date.now().toString(36) : null;
+		const targetHash = `#session=${encodeURIComponent(sessionId)}${nonce
+			? `&ask=${encodeURIComponent(String(askText).slice(0, 1500))}&n=${nonce}`
+			: ''}`;
 		// Already on this session (hash equal + the page confirmed it via its
 		// last report)? A repeated loadBrowser of the SAME hash fires no
 		// hashchange, so the full loop below would just poll for 30 s — skip.
-		const targetHash = `#session=${encodeURIComponent(sessionId)}`;
-		if ((state.browser.currentURI?.spec ?? '').endsWith(targetHash)) {
+		// (Asks never hit this fast path: the nonce differs every click.)
+		if (!nonce && (state.browser.currentURI?.spec ?? '').endsWith(targetHash)) {
 			try {
 				const ui = await DSH.Sidecar.plugin('ui.state', {}, { timeoutMs: 10_000 });
 				if (ui?.lastNav === sessionId) return true;
@@ -778,12 +833,20 @@ DSH.SessionWindow = (() => {
 			const docUrl = stripHash(state.browser.currentURI.spec);
 			for (let attempt = 0; attempt < 3; attempt++) {
 				if (seq !== state.navSeq) return false; // superseded by a newer switch
-				loadBrowser(`${docUrl}#session=${encodeURIComponent(sessionId)}`, { fragmentOnly: true });
+				loadBrowser(`${docUrl}${targetHash}`, { fragmentOnly: true });
 				for (let i = 0; i < 20; i++) {
 					if (seq !== state.navSeq) return false;
 					try {
 						const ui = await DSH.Sidecar.plugin('ui.state', {}, { timeoutMs: 10_000 });
-						if (ui?.lastNav === sessionId) return true;
+						// Asks confirm on the client's composer-fill report, not
+						// just navigation — a typed-but-unsent input is the point.
+						const confirmed = nonce
+							? (ui?.lastAsk?.nonce === nonce && ui?.lastAsk?.ok === true)
+							: (ui?.lastNav === sessionId);
+						if (confirmed) return true;
+						// Ask processed but the composer never appeared: stop
+						// retrying (the session itself is open — partial success).
+						if (nonce && ui?.lastAsk?.nonce === nonce) return false;
 					}
 					catch (e) { /* page may still be booting its client plugin */ }
 					await Zotero.Promise.delay(500);
@@ -813,6 +876,14 @@ DSH.SessionWindow = (() => {
 			if (state.navigating) return;
 			busy = true;
 			try {
+				// Collection watch (every tick ≈ 2 s): when the user moves around
+				// the collection tree, the injected guidance follows within one
+				// tick — the stored context must reflect where they are NOW.
+				const colSig = JSON.stringify(collectionContext() ?? null);
+				if (colSig !== state.collectionSig) {
+					state.collectionSig = colSig;
+					void pushChatContext();
+				}
 				// Title watch (every 3rd tick ≈ 6 s): pick up dsh's auto-rename
 				// of the current session so the dropdown and tab label follow
 				// within seconds of the first exchange.
@@ -978,6 +1049,7 @@ DSH.SessionWindow = (() => {
 				attachmentID,
 				itemTitle: isReader ? itemTitle(cur.itemID) : undefined,
 				itemMeta: isReader ? itemMeta(cur.itemID) : undefined,
+				collection: collectionContext(),
 			});
 		}
 		catch (e) {
@@ -1163,10 +1235,16 @@ DSH.SessionWindow = (() => {
 	 * Open (or reveal) the session surface.
 	 * @param {'list'|'reader'} mode
 	 * @param {number|null} itemID - the article the reader tab shows.
+	 * @param {object} [options]
+	 * @param {string} [options.askText] - prefill the composer with this text
+	 *   WITHOUT sending (「问 AI」flow; reader mode only in practice).
+	 * @returns {Promise<boolean>} whether the ask prefill was confirmed
+	 *   (true also for plain opens once navigation confirmed; false when the
+	 *   prefill/navigation could not be confirmed — degraded instances etc.).
 	 */
-	async function open(mode, itemID = null, { onStatus = null } = {}) {
+	async function open(mode, itemID = null, { onStatus = null, askText = null } = {}) {
 		const win = Zotero.getMainWindow();
-		if (!win) return;
+		if (!win) return false;
 		state.window = win;
 		ensurePanel(win);
 		surface();
@@ -1182,7 +1260,7 @@ DSH.SessionWindow = (() => {
 			catch (e) {
 				log('degraded page load failed', e?.message ?? e);
 			}
-			return;
+			return false;
 		}
 
 		// Resolve the session for this open.
@@ -1212,8 +1290,9 @@ DSH.SessionWindow = (() => {
 		refreshStatus();
 		void refreshSelector();
 		void sweepEmptySessions(); // clear the placeholders this open displaced
-		await navigateToSession(sessionId);
+		const navOk = await navigateToSession(sessionId, { askText: askText || null });
 		startObserving();
+		return navOk;
 	}
 
 	/** Open the surface focused on a specific existing session (e.g. the refetch assistant). */

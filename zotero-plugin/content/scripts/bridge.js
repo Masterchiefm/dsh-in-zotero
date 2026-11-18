@@ -441,6 +441,23 @@ DSH.Bridge = (() => {
 	async function opAdd(payload = {}) {
 		const typeName = String(payload.itemType ?? 'journalArticle');
 		if (!Zotero.ItemTypes.getID(typeName)) throw fail('zotero/bad-type', `未知条目类型 ${typeName}`);
+		// Pre-flight the adoptable attachments (the "PDF dragged in, no
+		// metadata yet" case) BEFORE creating anything — a bad id must not
+		// leave a half-created item behind. Adoption re-parents the existing
+		// attachment instead of re-importing the file, and the new item
+		// inherits the attachment's collections (mirroring Zotero's own
+		// drag-a-PDF-then-retrieve-metadata behavior).
+		const adoptees = [];
+		if (Array.isArray(payload.adoptAttachmentIDs) && payload.adoptAttachmentIDs.length) {
+			for (const aid of payload.adoptAttachmentIDs) {
+				const att = await getItem(aid);
+				if (!att.isAttachment()) throw fail('zotero/not-attachment', `id ${aid} 不是附件，无法挂接`);
+				const attName = att.getField('title') || att.attachmentFilename || att.id;
+				if (att.parentItemID) throw fail('zotero/has-parent', `附件「${attName}」已属于某个条目，不能重复挂接`);
+				if (att.deleted) throw fail('zotero/trashed', `附件「${attName}」在回收站，请先恢复`);
+				adoptees.push(att);
+			}
+		}
 		const item = new Zotero.Item(typeName);
 		const libraryID = Number.isInteger(payload.libraryID) ? payload.libraryID : userLibraryID();
 		item.libraryID = libraryID;
@@ -454,31 +471,63 @@ DSH.Bridge = (() => {
 		}
 		const id = await item.saveTx();
 		const saved = Zotero.Items.get(id);
-		return { ok: true, item: summaryRow(saved) };
+		const adopted = [];
+		const inherited = new Set();
+		for (const att of adoptees) {
+			// The collection membership moves from the attachment to the new
+			// parent (children don't live in collections) — same as Zotero's
+			// own retrieve-metadata-for-dragged-PDF behavior.
+			const attCollections = att.getCollections() ?? [];
+			for (const cid of attCollections) inherited.add(cid);
+			att.parentKey = saved.key;
+			for (const cid of attCollections) att.removeFromCollection(cid);
+			await att.saveTx();
+			adopted.push(attachmentInfo(att));
+		}
+		if (inherited.size) {
+			for (const cid of inherited) saved.addToCollection(cid);
+			await saved.saveTx();
+		}
+		return {
+			ok: true,
+			item: summaryRow(saved),
+			...(adopted.length ? { adoptedAttachments: adopted } : {}),
+		};
 	}
 
 	async function opAttach(payload = {}) {
-		const parent = await getItem(payload.id);
-		if (!parent.isRegularItem()) throw fail('zotero/not-regular', '只能给普通条目添加附件');
+		// standalone:true imports the file/link as a top-level attachment (the
+		// "先把 PDF 收进库，之后再用 add+adoptAttachmentIDs 识别建条目" flow).
+		const standalone = payload.standalone === true;
+		const parent = standalone ? null : await getItem(payload.id);
+		if (parent && !parent.isRegularItem()) throw fail('zotero/not-regular', '只能给普通条目添加附件');
+		const libraryID = parent ? parent.libraryID
+			: (Number.isInteger(payload.libraryID) ? payload.libraryID : userLibraryID());
+		let att;
 		if (payload.url) {
-			const att = await Zotero.Attachments.linkFromURL({
+			att = await Zotero.Attachments.linkFromURL({
 				url: String(payload.url),
 				title: String(payload.title ?? payload.url),
-				parentItemID: parent.id,
-				libraryID: parent.libraryID,
+				...(parent ? { parentItemID: parent.id } : {}),
+				libraryID,
 			});
-			return { ok: true, attachment: attachmentInfo(att) };
 		}
-		if (!payload.path) throw fail('zotero/invalid', '需要 path（本地文件）或 url');
-		if (!(await IOUtils.exists(String(payload.path)))) {
-			throw fail('zotero/no-file', `文件不存在: ${payload.path}`);
+		else {
+			if (!payload.path) throw fail('zotero/invalid', '需要 path（本地文件）或 url');
+			if (!(await IOUtils.exists(String(payload.path)))) {
+				throw fail('zotero/no-file', `文件不存在: ${payload.path}`);
+			}
+			att = await Zotero.Attachments.importFromFile({
+				file: String(payload.path),
+				...(parent ? { parentItemID: parent.id } : {}),
+				libraryID,
+				filename: payload.filename ? String(payload.filename) : undefined,
+			});
 		}
-		const att = await Zotero.Attachments.importFromFile({
-			file: String(payload.path),
-			parentItemID: parent.id,
-			libraryID: parent.libraryID,
-			filename: payload.filename ? String(payload.filename) : undefined,
-		});
+		if (standalone && Array.isArray(payload.collectionIDs) && payload.collectionIDs.length) {
+			for (const cid of payload.collectionIDs) att.addToCollection(Number(cid));
+			await att.saveTx();
+		}
 		return { ok: true, attachment: { ...attachmentInfo(att), path: await att.getFilePathAsync() } };
 	}
 
@@ -593,6 +642,52 @@ DSH.Bridge = (() => {
 			return { ok: true, opened: url };
 		}
 		throw fail('zotero/no-file', '既无本地文件也无 URL');
+	}
+
+	/** Locate an item in the literature list and highlight it: bring the
+	 * library tab forward (the selection lives only there), wait for the
+	 * just-created row to reach the current view, then let the collection
+	 * tree's own selectItem do the reveal — it selects in the current view,
+	 * falls back to the trash when the item is trashed, and to the library
+	 * root when no view shows it. Locating an attachment highlights its
+	 * parent item (that's what the list shows). */
+	async function opLocate(payload = {}) {
+		const item = await getItem(payload.id);
+		let target = item;
+		if (item.isAttachment?.() && item.parentItemID) {
+			target = Zotero.Items.get(item.parentItemID) ?? item;
+		}
+		const pane = Zotero.getActiveZoteroPane();
+		const tree = pane?.collectionTree ?? pane?.collectionsView;
+		if (!tree || typeof tree.selectItem !== 'function') {
+			throw fail('zotero/no-window', '找不到活动的 Zotero 文献列表窗口');
+		}
+		if (payload.focus !== false) {
+			try {
+				const win = pane.document?.defaultView;
+				if (win?.Zotero_Tabs && win.Zotero_Tabs.selectedID !== 'zotero-pane') {
+					win.Zotero_Tabs.select('zotero-pane');
+				}
+			}
+			catch (e) {
+				log('locate tab focus failed', e?.message ?? e);
+			}
+		}
+		// A freshly created item reaches the visible view through the
+		// Notifier's async refresh — poll for the row first so selectItem's
+		// "not found → switch to library root" fallback doesn't fire while
+		// the item is simply not flushed to the view yet.
+		for (let i = 0; i < 12; i++) {
+			if (!pane.itemsView || pane.itemsView._rowMap?.[target.id] !== undefined) break;
+			await Zotero.Promise.delay(250);
+		}
+		const found = await tree.selectItem(target.id);
+		return {
+			ok: true,
+			found: found !== false,
+			item: summaryRow(target),
+			...(item.id !== target.id ? { parentID: target.id } : {}),
+		};
 	}
 
 	// ------------------------------------------------- reader integration ------
@@ -1013,6 +1108,18 @@ DSH.Bridge = (() => {
 		return { ok: true, triggered: true };
 	}
 
+	/** dsh source detection internals (candidates + registry sweep + asar
+	 * engine probe + node lookup) — the remote diagnosis tool for
+	 * "检测不到 dsh" reports on other machines. */
+	async function opDebugDetect() {
+		try {
+			return { ok: true, ...(await DSH.Sidecar.detectionReport()) };
+		}
+		catch (e) {
+			return { ok: false, error: `${e?.message ?? e}` };
+		}
+	}
+
 	/** Test/diagnostic state of the session surface (panel + optional tab). */
 	async function opDebugState() {
 		const s = DSH.SessionWindow.state;
@@ -1212,6 +1319,122 @@ DSH.Bridge = (() => {
 				stateText: autoSwitch.querySelector('.dsh-auto-state')?.textContent ?? null,
 				track: !!autoSwitch.querySelector('.dsh-auto-track'),
 			} : null;
+			// 「自动」开关真实点击回路：渲染 → click → 回读 pref 原始形态
+			// （类型/双分支用户值）。验证「打开了关不掉」类报告的关键证据。
+			if (autoSwitch && payload.clickAuto === true) {
+				const prefFacts = () => {
+					const read = (name) => {
+						try {
+							const full = `extensions.zotero.dsh-in-zotero.${name}`;
+							const legacy = `dsh-in-zotero.${name}`;
+							const branch = Services.prefs;
+							const type = { 32: 'int', 64: 'string', 128: 'bool' }[branch.getPrefType(full)] ?? 'none';
+							let value = null;
+							try { value = Zotero.Prefs.get(full, true) ?? null; } catch (e) { value = `ERR ${e.message}`; }
+							return { type, value, hasUser: branch.prefHasUserValue(full), legacyHasUser: branch.prefHasUserValue(legacy), legacyValue: branch.prefHasUserValue(legacy) ? Zotero.Prefs.get(legacy, true) : null };
+						}
+						catch (e) {
+							return { error: String(e?.message ?? e) };
+						}
+					};
+					return read('translateAuto');
+				};
+				out.autoBefore = { pressed: out.autoSwitch.pressed, pref: prefFacts() };
+				// ① pref roundtrip exactly as the toggle handler does it —
+				// separates "pref layer broken" from "listener never ran".
+				const p1 = DSH.Util.prefGet('translateAuto', false);
+				DSH.Util.prefSet('translateAuto', !p1);
+				const p2 = DSH.Util.prefGet('translateAuto', false);
+				DSH.Util.prefSet('translateAuto', p1);
+				const p3 = DSH.Util.prefGet('translateAuto', false);
+				out.prefRoundtrip = { p1, p2, p3, restored: p3 === p1 };
+				// ② event delivery + element identity dissection.
+				let probeFired = false;
+				autoSwitch.addEventListener('click', () => { probeFired = true; }, { once: true });
+				let clickThrew = false;
+				try { autoSwitch.click(); }
+				catch (e) { clickThrew = String(e?.message ?? e); }
+				await new Promise(r => setTimeout(r, Number(payload.waitMs ?? 300)));
+				const after = doc.querySelector('.dsh-translate-auto');
+				out.autoAfter = {
+					probeFired,
+					clickThrew,
+					sameElement: after === autoSwitch,
+					totalAutoButtons: doc.querySelectorAll('.dsh-translate-auto').length,
+					pressedSameRef: autoSwitch.getAttribute('aria-pressed'),
+					pressedRequeried: after?.getAttribute('aria-pressed') ?? null,
+					stateText: after?.querySelector('.dsh-auto-state')?.textContent ?? null,
+					pref: prefFacts(),
+					rawBool: (() => { try { return Services.prefs.getBoolPref('extensions.zotero.dsh-in-zotero.translateAuto'); } catch (e) { return `ERR ${e?.message ?? e}`; } })(),
+				};
+				// ④ atomic-level dissection: raw Gecko write/read, neutral pref
+				// roundtrip, and Zotero.Prefs source (monkey-patch check).
+				if (payload.atomic === true) {
+					const full = 'extensions.zotero.dsh-in-zotero.translateAuto';
+					const neutral = 'extensions.zotero.dsh-in-zotero.__atomic_probe';
+					let atomic = {};
+					try {
+						Services.prefs.setBoolPref(full, false);
+						atomic.rawAfterSet = Services.prefs.getBoolPref(full);
+						atomic.hasUserAfterSet = Services.prefs.prefHasUserValue(full);
+						atomic.zprefsGet = Zotero.Prefs.get(full, true);
+						// neutral roundtrip through both layers
+						Services.prefs.setBoolPref(neutral, false);
+						atomic.neutralRaw = Services.prefs.getBoolPref(neutral);
+						Zotero.Prefs.set(neutral, false, true);
+						atomic.neutralZget = Zotero.Prefs.get(neutral, true);
+						Services.prefs.clearUserPref(neutral);
+						// double-name check (inverted global flag would land here)
+						const dbl = 'extensions.zotero.' + full;
+						atomic.doubleNameHasUser = Services.prefs.prefHasUserValue(dbl);
+						// monkey-patch check
+						atomic.getSrc = String(Zotero.Prefs.get).slice(0, 400);
+						atomic.setSrc = String(Zotero.Prefs.set).slice(0, 400);
+						// restore the user's value
+						Services.prefs.setBoolPref(full, true);
+						atomic.restored = Services.prefs.getBoolPref(full);
+					}
+					catch (e) {
+						atomic.error = String(e?.message ?? e);
+					}
+					out.atomic = atomic;
+				}
+				// Toggle back so the probe leaves the user's setting as it was.
+				if (payload.restore !== false) {
+					const again = doc.querySelector('.dsh-translate-auto');
+					again?.click();
+					await new Promise(r => setTimeout(r, Number(payload.waitMs ?? 300)));
+					const restored = doc.querySelector('.dsh-translate-auto');
+					out.autoRestored = { pressed: restored?.getAttribute('aria-pressed') ?? null };
+				}
+			}
+			// 「问 AI」端到端：真实点击问AI按钮 → 等绑定会话打开 + composer
+			// 预填 → 回读 surface 当前会话与 ui.state 的 lastAsk 回执。
+			if (out.translateButton && payload.clickAsk === true) {
+				const askBtn = doc.querySelector('.dsh-translate-ask');
+				out.askButton = !!askBtn;
+				if (askBtn) {
+					askBtn.click();
+					await new Promise(r => setTimeout(r, Number(payload.askWaitMs ?? 12000)));
+					try {
+						const s = DSH.SessionWindow.state;
+						out.askSurface = {
+							host: s.host,
+							current: s.current ? { mode: s.current.mode, itemID: s.current.itemID, sessionId: s.current.sessionId } : null,
+						};
+					}
+					catch (e) {
+						out.askSurface = { error: String(e?.message ?? e) };
+					}
+					try {
+						const ui = await DSH.Sidecar.plugin('ui.state', {}, { timeoutMs: 10_000 });
+						out.askUi = { lastAsk: ui?.lastAsk ?? null, lastNav: ui?.lastNav ?? null };
+					}
+					catch (e) {
+						out.askUi = { error: String(e?.message ?? e) };
+					}
+				}
+			}
 			if (out.translateButton && payload.clickTranslate === true) {
 				const btn = doc.querySelector('.dsh-translate-button');
 				// When the auto switch fired on render, the stream is already
@@ -1334,12 +1557,14 @@ DSH.Bridge = (() => {
 		note: opNote,
 		itemtypes: opItemTypes,
 		open: opOpen,
+		locate: opLocate,
 		'reader.search': opReaderSearch,
 		'reader.locate': opReaderLocate,
 		'reader.annotate': opReaderAnnotate,
 		notes: opNotes,
 		'debug.open': opDebugOpen,
 		'debug.state': opDebugState,
+		'debug.detect': opDebugDetect,
 		'debug.nav': opDebugNav,
 		'debug.navremote': opDebugNavRemote,
 		'debug.openreader': opDebugOpenReader,

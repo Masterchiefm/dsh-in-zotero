@@ -9,23 +9,41 @@ DSH.Refetch = (() => {
 	const MENU_ID = 'dsh-in-zotero-refetch-menu';
 
 	async function dispatch(items) {
+		// Two kinds of targets: regular items (metadata rewritten in place)
+		// and standalone attachments (no parent item — the agent identifies
+		// the work, creates a proper parent item, and pulls the attachment
+		// into it via zotero_add's adoptAttachmentIDs).
 		const targets = items
-			.filter(item => item?.isRegularItem?.())
-			.map(item => ({
-				id: item.id,
-				key: item.key,
-				title: item.getDisplayTitle?.() ?? '',
-				itemType: Zotero.ItemTypes.getName(item.itemTypeID),
-				doi: String(item.getField('DOI', false, true) ?? ''),
-				attachmentID: item.getBestAttachment
-					? (() => {
-						try { return (item.getAttachments() ?? [])[0] ?? null; }
-						catch (e) { return null; }
-					})()
-					: null,
-			}));
+			.map(item => {
+				if (item?.isRegularItem?.()) {
+					return {
+						id: item.id,
+						key: item.key,
+						title: item.getDisplayTitle?.() ?? '',
+						itemType: Zotero.ItemTypes.getName(item.itemTypeID),
+						doi: String(item.getField('DOI', false, true) ?? ''),
+						attachmentID: (() => {
+							try { return (item.getAttachments() ?? [])[0] ?? null; }
+							catch (e) { return null; }
+						})(),
+					};
+				}
+				if (item?.isAttachment?.() && !item.parentItemID) {
+					return {
+						id: item.id,
+						key: item.key,
+						title: item.getDisplayTitle?.() ?? item.attachmentFilename ?? '',
+						itemType: 'attachment',
+						doi: '',
+						attachmentID: item.id,
+						standalone: true,
+					};
+				}
+				return null;
+			})
+			.filter(Boolean);
 		if (targets.length === 0) {
-			toast('AI 重新获取元数据', '选中的条目中没有普通文献条目');
+			toast('AI 重新获取元数据', '选中的条目中没有文献条目或未识别的独立附件');
 			return;
 		}
 
@@ -74,9 +92,10 @@ DSH.Refetch = (() => {
 			try {
 				const pane = win.ZoteroPane;
 				const items = pane?.getSelectedItems?.() ?? [];
-				const hasRegular = items.some(i => i?.isRegularItem?.());
-				item.hidden = !hasRegular;
-				separator.hidden = !hasRegular;
+				const hasTarget = items.some(i => i?.isRegularItem?.()
+					|| (i?.isAttachment?.() && !i.parentItemID));
+				item.hidden = !hasTarget;
+				separator.hidden = !hasTarget;
 			}
 			catch (e) { /* leave visible */ }
 		}, { once: false });

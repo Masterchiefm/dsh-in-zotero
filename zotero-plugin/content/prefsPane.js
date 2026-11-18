@@ -42,7 +42,11 @@
 			const detected = doc.getElementById('dsh-source-detected');
 			const pluginPath = doc.getElementById('dsh-attach-plugin-path');
 			const bits = [];
-			if (info?.desktop) bits.push(`已检测到 dsh 桌面版：${info.desktop.exe}`);
+			if (info?.desktop) {
+				bits.push(info.desktop.engineOk === false
+					? `已检测到 dsh 桌面版（${info.desktop.exe}），但其内未找到 dsh 内核——该版本布局不受支持，将自动改用其他来源`
+					: `已检测到 dsh 桌面版：${info.desktop.exe}`);
+			}
 			if (info?.bundledReady) bits.push('内置运行时已安装');
 			const resolved = info?.resolvedMode ?? '';
 			if (resolved && normalizeMode(info?.mode) === 'auto') {
@@ -224,6 +228,24 @@
 		});
 	}
 
+	/** The wish button: open a fresh DSH session pre-briefed for feature
+	 * wishes / bug fixes on this very plugin (repo URL + PR flow live in the
+	 * briefing injected by the bridge's task.wish op). All the work — cold
+	 * start, session creation, panel surfacing — happens in the main sandbox;
+	 * errors are toasted there, so this side just fires and forgets. */
+	function wireWish(doc) {
+		doc.getElementById('dsh-wish-button')?.addEventListener('command', () => {
+			const api = window.Zotero?.DSHinZotero;
+			if (typeof api?.openWishSession !== 'function') return;
+			try {
+				void Promise.resolve(api.openWishSession()).catch(() => { /* toasted by the API */ });
+			}
+			catch (e) {
+				Zotero?.logError?.(e);
+			}
+		});
+	}
+
 	/** The prefs window has no Zotero.ProgressWindow; surface result lines in
 	 * the cleanup status label instead. */
 	function DSHinZoteroPaneToast(doc, text) {
@@ -381,6 +403,7 @@
 		wireDirPickers(doc);
 		fillInstall(doc);
 		fillCleanup(doc);
+		wireWish(doc);
 	}
 
 	if (document.readyState === 'loading') {

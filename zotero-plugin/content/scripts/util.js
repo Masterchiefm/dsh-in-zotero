@@ -14,19 +14,44 @@ DSH.Util = (() => {
 	function prefGet(name, fallback) {
 		try {
 			const full = PREF_BRANCH + name;
+			const legacyFull = LEGACY_BRANCH + name;
 			// One-time carry-over from the pre-0.8.6 bare branch (bindings,
 			// panelBox, bridgeToken, translateAuto — the values that matter).
 			// Gated on prefHasUserValue: prefs.js ships DEFAULTS under the new
 			// branch, and a bare getValue would return those and shadow the
 			// real legacy user value forever (translateAuto/panelBox hit this).
+			//
+			// The carry-over must CONSUME the legacy value (clearUserPref) —
+			// keeping it made the migration an endless resurrection: setting a
+			// pref to a value EQUAL to its default clears the user value again
+			// (Gecko dedup), the next read re-migrated the stale legacy value
+			// over it, and prefs could never leave their legacy state — the
+			// 「自动」translate toggle snapped back to ON on every click.
 			if (!Services.prefs.prefHasUserValue(full)
-				&& Services.prefs.prefHasUserValue(LEGACY_BRANCH + name)) {
-				const legacy = Zotero.Prefs.get(LEGACY_BRANCH + name, true);
+				&& Services.prefs.prefHasUserValue(legacyFull)) {
+				const legacy = Zotero.Prefs.get(legacyFull, true);
 				if (legacy !== undefined) {
-					try { Zotero.Prefs.set(full, legacy, true); }
+					let migrated = false;
+					try {
+						Zotero.Prefs.set(full, legacy, true);
+						migrated = true;
+					}
 					catch (e) { /* type mismatch — keep reading legacy */ }
+					// Only consume after a successful carry-over; a failed write
+					// keeps the legacy value so nothing is lost.
+					if (migrated) {
+						try { Services.prefs.clearUserPref(legacyFull); } catch (e) { /* cosmetic */ }
+					}
 					return legacy;
 				}
+			}
+			else if (Services.prefs.prefHasUserValue(legacyFull)) {
+				// The canonical branch already has the say — consume the stale
+				// legacy copy NOW so it can never resurrect: when a pref is
+				// later set to a value equal to its default, Gecko drops the
+				// user value, and without this the very next read would
+				// re-migrate the legacy value over the user's choice.
+				try { Services.prefs.clearUserPref(legacyFull); } catch (e) { /* cosmetic */ }
 			}
 			const value = Zotero.Prefs.get(full, true);
 			return value === undefined ? fallback : value;
