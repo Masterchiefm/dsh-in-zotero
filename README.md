@@ -29,8 +29,10 @@
 
 ### 手动安装
 
+本插件已收录于 [Zotero 中文社区插件商店](https://zotero-chinese.com/plugins/)（搜索「dsh-in-zotero」即可获取下载链接）；也可按下列步骤手动安装：
+
 1. 到 [**Releases**](https://github.com/Masterchiefm/dsh-in-zotero/releases/latest) 下载最新的 `dsh-in-zotero-x.y.z.xpi`
-   （国内直连 GitHub 慢时，可用任意 GitHub 加速镜像前缀拼接下载地址；也可从 [Zotero 中文社区插件商店](https://github.com/zotero-chinese/zotero-plugins) 安装）
+   （国内直连 GitHub 慢时，可用任意 GitHub 加速镜像前缀拼接下载地址）
 2. 打开 Zotero → 工具 → 插件 → 右上角齿轮 → **Install Plugin From File…** → 选中下载的 `.xpi`
 3. 重启 Zotero
 
