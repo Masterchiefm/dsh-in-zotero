@@ -9,6 +9,10 @@
         {
           "version": "0.1.19",
           "update_link": "https://github.com/Masterchiefm/dsh-in-zotero/releases/download/v0.1.19/dsh-in-zotero-0.1.19.xpi"
+        },
+        {
+          "version": "0.1.20",
+          "update_link": "https://github.com/Masterchiefm/dsh-in-zotero/releases/download/v0.1.20/dsh-in-zotero-0.1.20.xpi"
         }
       ]
     }
