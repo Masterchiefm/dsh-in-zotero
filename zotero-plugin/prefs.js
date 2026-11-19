@@ -71,3 +71,7 @@ pref("extensions.zotero.dsh-in-zotero.desktopDir", "");
 // in lastUpdateCheck (ms epoch, internal).
 pref("extensions.zotero.dsh-in-zotero.autoUpdate", true);
 pref("extensions.zotero.dsh-in-zotero.lastUpdateCheck", 0);
+// Startup dialog when Zotero's HTTP server (the「允许本机其他应用与 Zotero
+// 通信」toggle every zotero_* tool depends on) is not listening. The dialog
+// offers one-click enable; ticking 「不再提示」 sets this to true.
+pref("extensions.zotero.dsh-in-zotero.suppressHttpServerPrompt", false);

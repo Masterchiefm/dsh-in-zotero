@@ -566,9 +566,19 @@ DSH.Sidecar = (() => {
 		throw new Error(`找不到 npm（${npmCli}）或 pnpm。请安装完整版 Node.js（自带 npm），或在设置中指定本机 node.exe 路径。`);
 	}
 
+	/** Zotero's HTTP server port. `Zotero.Server.port` is a getter that
+	 * *throws* while the server is not listening (pref off / failed bind) —
+	 * `?.` does not guard getters — so DSH.Util.httpServerPort() returns null
+	 * and we fall back to the pref, then the well-known default. Nothing
+	 * listens at that address until the server is enabled (index.js's prereq
+	 * check offers one-click enable). */
+	function zoteroPort() {
+		return DSH.Util.httpServerPort() ?? Zotero.Prefs.get('httpServer.port') ?? 23119;
+	}
+
 	function appendEnv(extra) {
 		const env = {
-			DSH_ZOTERO_PORT: String(Zotero.Server?.port ?? 23119),
+			DSH_ZOTERO_PORT: String(zoteroPort()),
 			DSH_ZOTERO_TOKEN: bridgeToken(),
 			DSH_IN_ZOTERO: '1',
 			...extra,

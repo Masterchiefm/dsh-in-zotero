@@ -141,7 +141,7 @@ DSH.Bridge = (() => {
 		return {
 			ok: true,
 			zoteroVersion: Zotero.version,
-			serverPort: Zotero.Server?.port ?? null,
+			serverPort: DSH.Util.httpServerPort(), // raw getter throws when server is off
 			items: itemCount,
 			collections: collections.length,
 		};
@@ -1163,6 +1163,9 @@ DSH.Bridge = (() => {
 			attached: !!DSH.Sidecar.state.attached,
 			bridgeOk: DSH.Sidecar.state.bridgeOk,
 			resolvedMode: DSH.Sidecar.state.resolvedMode || '',
+			// Zotero's HTTP server: the tools' callback channel (null port =
+			// not listening — every zotero_* tool would fail).
+			httpServer: Zotero.DSHinZotero.httpServerStatus(),
 			desktopPath: DSH.Sidecar.state.desktopPath || '',
 			apiBase: DSH.Sidecar.state.apiBase || '',
 			host: s.host,
@@ -1574,6 +1577,18 @@ DSH.Bridge = (() => {
 		return result;
 	}
 
+	/** Test/diagnostic: Zotero HTTP server prerequisite (the sidecar's tools
+	 * call back over it). payload { enable?: bool } performs the one-click
+	 * enable (pref + Zotero.Server.init(), live effect); otherwise read-only
+	 * status. */
+	async function opDebugHttpServer(payload = {}) {
+		if (payload.enable === true) {
+			const port = await Zotero.DSHinZotero.enableHttpServer();
+			return { ok: true, enabled: port != null, port };
+		}
+		return { ok: true, ...Zotero.DSHinZotero.httpServerStatus() };
+	}
+
 	const OPS = {
 		status: opStatus,
 		search: opSearch,
@@ -1605,6 +1620,7 @@ DSH.Bridge = (() => {
 		'debug.cleanup': opDebugCleanup,
 		'debug.refetch': opDebugRefetch,
 		'debug.update': opDebugUpdate,
+		'debug.httpserver': opDebugHttpServer,
 	};
 
 	function register() {
@@ -1637,7 +1653,9 @@ DSH.Bridge = (() => {
 			};
 			Zotero.Server.Endpoints[PREFIX + name] = endpoint;
 		}
-		log(`bridge endpoints registered (${Object.keys(OPS).length} ops) on port ${Zotero.Server?.port}`);
+		// DSH.Util.httpServerPort(), not Zotero.Server?.port — the getter throws
+		// while the server is off (registration itself is port-independent).
+		log(`bridge endpoints registered (${Object.keys(OPS).length} ops) on port ${DSH.Util.httpServerPort() ?? 'n/a'}`);
 	}
 
 	function unregister() {

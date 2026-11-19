@@ -125,14 +125,16 @@ powershell -NoProfile -Command "Start-Process 'C:\Program Files\Zotero\zotero.ex
 
 29. **桌面版引擎要「验证 asar」而不是「拼接路径」，工具链用 dsh-runtimes 兜底（0.1.10）**：① `app.asar\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js` 在真实文件系统上不存在（asar 内部路径 `IOUtils.exists` 恒 false），Electron-as-node 能读 ≠ 插件能验证。`asarFiles()` 解析 asar 头（u32@0=4 常量、u32@12=JSON 长度、正文在偏移 16，带一项 mtime+size 缓存——头有 ~6MB）后走 `files` 树确认引擎在不在；**对 asar 头做字符串 grep 会误判**——JSON 内键序任意，`"@deepseek-ai":{"files":{"dsh"` 这类模式靠不住，曾据此误判桌面版 44.7.0「asar 里没有 dsh 包」，实际 `/dsh/node_modules/@deepseek-ai/` 下 200+ 个 dsh-* 包俱全（含 dsh/lib/bin.js）。② `asarHas` 的游走起点必须与 `asarFiles` 返回值同层（根节点 `{files}` vs files 映射差一层 `.files`；不一致时恒 false 且**无任何日志**，首次实机 `engineOk:false` 就是它）。③ 引擎验证失败时 auto 链降级 bundled/prompt，不再 spawn 后才「dsh 进程提前退出」；`hasReadySource` 同样要求引擎可用，避免预热空启动。④ dsh 桌面版自带托管工具链 `~/.dsh/dsh-runtimes/<name>/dependencies/{node,pnpm,python}`（runtime.json 记版本）：该 node 是**无 npm 的裸 node**（node_modules 只有 README），`ensureRuntime` 的 npm 兜底走同目录 `pnpm/pnpm.cjs`（`node pnpm.cjs --dir <runtimeDir> add @deepseek-ai/dsh@…`，pnpm 无 --prefix 概念，其符号链接布局 pathExists/node 都能穿透）；`nodePath()` 亦纳入该 node 候选——无系统 Node 的机器 bundled 模式照样能装能跑。
 
+30. **`httpServer.enabled` 关闭时没有任何运行时观察者，`Zotero.Server.port` 是会 throw 的 getter（0.1.21 修复）**：「允许本机其他应用与 Zotero 通信」这个开关只在启动时把关一次（`xpcom/zotero.js` 的 `if (Prefs.get('httpServer.enabled')) await Zotero.Server.init()`），**全 omni.ja 无 pref 观察者**——Zotero 自己的设置页启用它是「写 pref + `Zotero.Utilities.Internal.quit(true)` 退出重启」（Zotero 8 里旧的复选框已从高级面板消失，只剩 localAPI 区的「启用并重启」按钮），所以**光设 pref 不会让服务器动起来**。插件的一键启用（index.js `enableHttpServer`）= 设 pref + 亲自 `await Zotero.Server.init()`（幂等：`if (serv) return`，失败静默置 serv=undefined，需再读 port 验证）。另一个坑：`Zotero.Server.port` 在 `serv` 未建时 **getter 直接 throw 'Server not initialized'**，`?.` 只挡 null 对象、挡不住 throw——sidecar.js 的 `DSH_ZOTERO_PORT` 曾写 `Zotero.Server?.port ?? 23119`，服务器关闭时 spawn 会炸出玄学错误，现走 `zoteroPort()`（try/catch → `httpServer.port` pref → 23119）。启动检测/弹窗在 index.js `checkHttpServerPrereq`（延迟 8s，「不再提示」存 `suppressHttpServerPrompt`）；验证用 `debug.httpserver {enable:true}` 与 `debug.state` 的 `httpServer` 字段。
+
 ## debug.* 诊断端点（token 守卫，随插件发行）
 
 `POST http://127.0.0.1:23119/dsh-bridge/<op>`，头 `x-dsh-in-zotero-token: <profile>/dsh-in-zotero/bridge-token 的内容>`：
 
 - `debug.open {mode:'list'|'reader', itemID, host?:'panel'|'tab'}` — 等价点击唤醒按钮（host 可强制宿主）
-- `debug.state` — sidecar 阶段/dshMode/bridgeOk/宿主/悬浮窗可见性/当前会话/嵌入页 URI/ui 上报新鲜度
+- `debug.state` — sidecar 阶段/dshMode/bridgeOk/宿主/悬浮窗可见性/当前会话/嵌入页 URI/ui 上报新鲜度 + `httpServer`（Zotero HTTP 服务器 listening/port/pref——tools 回调通道是否存活）
 - `debug.detect` — dsh 来源检测全套内部状态：候选路径+来源标签（manual/default/registry/path）、注册表扫描条数、桌面版 asar 引擎验证（binJs/engineVia/engineOk）、node 路径。「检测不到 dsh」类报告的远程诊断入口
-- `debug.openreader {itemID}` / `debug.reader {dispatchPopup?, clickTranslate?, text?}` — 开阅读器、验工具栏按钮、跑端到端翻译流
+- `debug.httpserver {enable?:bool}` — Zotero HTTP 服务器前置条件的状态/一键启用（pref + `Zotero.Server.init()`，即时生效）。「AI 全失败/未检测到本地通信服务」类报告的远程诊断与修复入口
 - `debug.refetch {items:[id]}` — 跑 AI 元数据重取
 - `debug.nav / debug.navremote` — 嵌入 browser 导航探针
 

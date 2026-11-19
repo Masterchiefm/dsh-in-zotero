@@ -119,6 +119,21 @@ DSH.Util = (() => {
 		}
 	}
 
+	/** Port of Zotero's HTTP server while it is actually listening, else null.
+	 * `Zotero.Server.port` is a getter that *throws* when the server never
+	 * started (httpServer.enabled off, or a failed bind) — `?.` guards null
+	 * objects, not throwing getters. The server is the tools' only callback
+	 * channel (/dsh-bridge/*); index.js's startup check offers one-click
+	 * enable when this returns null. */
+	function httpServerPort() {
+		try {
+			return Zotero.Server?.port ?? null;
+		}
+		catch (e) {
+			return null; // 'Server not initialized'
+		}
+	}
+
 	async function readTextFile(path) {
 		return IOUtils.readUTF8(path);
 	}
@@ -205,6 +220,7 @@ DSH.Util = (() => {
 		PREF_BRANCH,
 		prefGet, prefSet, prefGetJSON, prefSetJSON,
 		log, uuid, homeDir, joinPath, pathExists, readTextFile, writeTextFile, pathToURI,
+		httpServerPort,
 		toast, xhr,
 	};
 })();

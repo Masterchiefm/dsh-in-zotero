@@ -166,6 +166,71 @@ DSH.UI = (() => {
 	return { ensureToolbarButton, onRenderToolbar, openSessionWindow, openSettings, ensurePrefsPane };
 })();
 
+// --- Zotero HTTP server prerequisite -----------------------------------------
+
+// Zotero's HTTP server (the「允许其他程序与 Zotero 通信」toggle) is the only
+// channel the sidecar's tools have into the library — every zotero_* tool
+// calls back over /dsh-bridge/* on 127.0.0.1:<port>. Zotero gates it solely
+// at startup (`if (Prefs.get('httpServer.enabled')) await Zotero.Server.init()`
+// in xpcom/zotero.js) and ships no runtime pref observer; even Zotero's own
+// prefs UI enables it by setting the pref and then quitting the app. The
+// safe read is DSH.Util.httpServerPort() (the port getter throws while the
+// server is down — see util.js); null here means "tools cannot reach us".
+
+/** One-click enable: persist the pref (what Zotero itself would save), then
+ * start the listener through Zotero.Server.init() — the exact call startup
+ * makes when the pref is on, and idempotent. Resolves to the listening port,
+ * or null when the bind failed. Toasts the outcome (also the debug path's
+ * visible feedback). */
+async function enableHttpServer() {
+	try {
+		Zotero.Prefs.set('httpServer.enabled', true);
+		await Zotero.Server.init();
+	}
+	catch (e) {
+		DSH.Util.log('Zotero.Server.init failed', e?.message ?? e);
+	}
+	const port = DSH.Util.httpServerPort();
+	if (port != null) DSH.Util.toast('DSH', `已启用 Zotero 本地通信服务（端口 ${port}），AI 功能现在可用`);
+	else DSH.Util.toast('DSH', '启用未生效（端口可能被占用），请重启 Zotero 后重试');
+	return port;
+}
+
+/** Startup check: when the HTTP server is not listening, explain what breaks
+ * and offer one-click enable. Runs once per session from onStartup (delayed
+ * so it never fights boot); 「不再提示」 persists suppressHttpServerPrompt. */
+async function checkHttpServerPrereq() {
+	try {
+		if (DSH.Util.httpServerPort() != null) return; // listening — nothing to do
+		if (DSH.Util.prefGet('suppressHttpServerPrompt', false)) return;
+		const win = Zotero.getMainWindow();
+		if (!win || typeof Services.prompt?.confirmEx !== 'function') {
+			DSH.Util.log('http server off: no main window / prompt service, skipping');
+			return;
+		}
+		const ps = Services.prompt;
+		const port = Zotero.Prefs.get('httpServer.port') ?? 23119;
+		const flags = ps.BUTTON_POS_0 * ps.BUTTON_TITLE_IS_STRING
+			+ ps.BUTTON_POS_1 * ps.BUTTON_TITLE_IS_STRING;
+		const check = { value: false };
+		const pick = ps.confirmEx(win, 'dsh-in-zotero',
+			`Zotero 的本地通信服务未开启（HTTP 服务器，端口 ${port}）。`
+			+ '本插件的 AI 功能依赖它读写文库——会话里的检索/入库/改条目/定位高亮、'
+			+ '「AI 重新获取元数据」都将无法使用（划词翻译和纯聊天不受影响）。\n\n'
+			+ '要现在启用吗？立即生效，无需重启 Zotero；该服务只监听本机 127.0.0.1，不对外开放。',
+			flags, '启用', '暂不', null, '不再提示', check);
+		if (check.value) DSH.Util.prefSet('suppressHttpServerPrompt', true);
+		if (pick !== 0) {
+			DSH.Util.log('http server off: user declined enable');
+			return;
+		}
+		await enableHttpServer();
+	}
+	catch (e) {
+		DSH.Util.log('http server prereq check failed', e?.message ?? e);
+	}
+}
+
 // ---------------------------------------------------------------------------- hooks
 
 Zotero.DSHinZotero = {
@@ -256,6 +321,17 @@ Zotero.DSHinZotero = {
 	checkUpdate(opts = {}) {
 		return DSH.Update.check(opts);
 	},
+	/** Zotero HTTP server state for diagnostics (debug.httpserver): listening
+	 * port (null = not running), and what the pref says. */
+	httpServerStatus() {
+		const port = DSH.Util.httpServerPort();
+		return { listening: port != null, port, pref: !!Zotero.Prefs.get('httpServer.enabled') };
+	},
+	/** One-click enable of Zotero's HTTP server (debug/settings flows). See
+	 * enableHttpServer() — live effect, no restart. */
+	enableHttpServer() {
+		return enableHttpServer();
+	},
 	hooks: {
 		onStartup() {
 			DSH.Util.log('starting', ctx.VERSION);
@@ -268,6 +344,11 @@ Zotero.DSHinZotero = {
 			catch (e) {
 				DSH.Util.log('bridge register failed', e);
 			}
+
+			// Prerequisite: Zotero's HTTP server must be on for the tools to
+			// reach the bridge. Delayed past boot so the dialog never interrupts
+			// startup; toast-level feedback only.
+			Zotero.Promise.delay(8000).then(() => checkHttpServerPrereq()).catch(() => {});
 
 			// Weekly update check (GitHub releases; CDN download fallback).
 			try {
