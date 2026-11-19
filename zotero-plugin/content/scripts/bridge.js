@@ -327,7 +327,12 @@ DSH.Bridge = (() => {
 			const isPDF = (item.attachmentContentType ?? '').includes('pdf') || /\.pdf$/i.test(path);
 			if (isPDF) {
 				try {
-					text = await Zotero.PDFWorker.getFullText(item.id);
+					// PDFWorker.getFullText() resolves to { text, extractedPages,
+					// totalPages } — NOT a string. Assigning the whole object left
+					// text.slice/toLowerCase throwing "[zotero/error] … is not a
+					// function" on every PDF whose .zotero-ft-cache wasn't built yet.
+					const result = await Zotero.PDFWorker.getFullText(item.id);
+					text = typeof result?.text === 'string' ? result.text : '';
 					source = 'pdf-worker';
 				}
 				catch (e) {
@@ -344,9 +349,15 @@ DSH.Bridge = (() => {
 			}
 		}
 
+		// Belt and braces: every source above must yield a string, but a
+		// non-string here used to explode as "text.slice is not a function".
+		if (typeof text !== 'string') text = text ? String(text) : '';
 		const maxChars = Math.min(Math.max(Number(payload.maxChars) || 60000, 500), 400000);
 		let offset = Math.max(Number(payload.offset) || 0, 0);
 		const search = String(payload.search ?? '').trim();
+		// Scanned PDFs (no text layer) extract to an empty string — say so
+		// instead of returning a silent empty payload the agent would retry.
+		const emptyNote = text ? undefined : '全文为空：该文件可能没有文本层（扫描件），或文本提取尚未完成。';
 		if (search) {
 			// Locate up to 5 context windows around matches.
 			const windows = [];
@@ -366,6 +377,7 @@ DSH.Bridge = (() => {
 				total: text.length,
 				matches: windows.length,
 				text: windows.join('\n———\n') || '(未找到匹配)',
+				note: emptyNote,
 			};
 		}
 		const slice = text.slice(offset, offset + maxChars);
@@ -378,6 +390,7 @@ DSH.Bridge = (() => {
 			offset,
 			nextOffset: offset + slice.length < text.length ? offset + slice.length : null,
 			text: slice,
+			note: emptyNote,
 		};
 	}
 

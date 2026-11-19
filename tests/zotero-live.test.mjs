@@ -44,6 +44,32 @@ function findZoteroProfile() {
 	return null
 }
 
+/** A minimal one-page PDF (with valid xref offsets) carrying known text —
+ * lets the live test exercise the real PDFWorker full-text path. */
+function buildMinimalPdf(textLine) {
+	const enc = (s) => Buffer.from(s, 'latin1')
+	const content = `BT /F1 14 Tf 72 720 Td (${textLine}) Tj ET`
+	const header = '%PDF-1.4\n'
+	const objs = [
+		'1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+		'2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+		'3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n',
+		`4 0 obj\n<< /Length ${enc(content).length} >>\nstream\n${content}\nendstream\nendobj\n`,
+		'5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+	]
+	let body = ''
+	const offsets = []
+	for (const obj of objs) {
+		offsets.push(enc(header + body).length)
+		body += obj
+	}
+	let xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`
+	for (const off of offsets) xref += `${String(off).padStart(10, '0')} 00000 n \n`
+	const startx = enc(header + body).length
+	const trailer = `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${startx}\n%%EOF\n`
+	return enc(header + body + xref + trailer)
+}
+
 async function main() {
 	const port = Number(argv.get('port') ?? 23119)
 	const base = `http://127.0.0.1:${port}/dsh-bridge/`
@@ -184,6 +210,33 @@ async function main() {
 	const readAny = await call('read', { id: itemID })
 	check('read on item without file attachment → graceful', readAny.status === 400 || readAny.body.ok === false
 		|| readAny.body.kind !== undefined, readAny.body.error?.message ?? readAny.body.kind ?? '')
+
+	// --- full-text read of a REAL PDF (the PDFWorker path) ---------------------
+	// Regression: PDFWorker.getFullText() resolves to { text, pages } — an early
+	// version assigned the whole object, so every unindexed PDF blew up as
+	// "[zotero/error] text.slice is not a function" / "text.toLowerCase …".
+	// The fresh attachment has no .zotero-ft-cache yet, so this walks exactly
+	// that path and asserts a string comes back.
+	const probeLine = 'dsh fulltext probe 12345'
+	const pdfFile = path.join(os.tmpdir(), `dsh-pdf-selftest-${Date.now()}.pdf`)
+	fs.writeFileSync(pdfFile, buildMinimalPdf(probeLine))
+	const pdfAtt = await call('attach', { standalone: true, path: pdfFile, collectionIDs: [collectionID] })
+	check('attach standalone pdf', pdfAtt.body.ok === true, pdfAtt.body.error?.message ?? `id ${pdfAtt.body.attachment?.id}`)
+	const pdfAttID = pdfAtt.body.attachment?.id
+	if (pdfAtt.body.ok === true && pdfAttID) {
+		const pdfRead = await call('read', { id: pdfAttID, maxChars: 4000 })
+		check('read extracts PDF text (string, not object)', pdfRead.body.ok === true
+			&& typeof pdfRead.body.text === 'string'
+			&& pdfRead.body.text.includes(probeLine),
+			`source=${pdfRead.body?.source} total=${pdfRead.body?.total} ${pdfRead.body?.error?.message ?? ''}`)
+		const pdfSearch = await call('read', { id: pdfAttID, search: 'fulltext probe' })
+		check('read search on PDF (toLowerCase path)', pdfSearch.body.ok === true
+			&& typeof pdfSearch.body.text === 'string'
+			&& pdfSearch.body.text.includes(probeLine), pdfSearch.body?.error?.message ?? '')
+		const pdfGone = await call('trash', { id: pdfAttID, action: 'delete' })
+		check('delete pdf attachment', pdfGone.body.ok === true)
+	}
+	fs.rmSync(pdfFile, { force: true })
 
 	const annotations = await call('annotations', { id: itemID })
 	check('annotations (empty ok)', annotations.body.ok === true)
