@@ -3,7 +3,8 @@
 // Input/pref syncing is handled by Zotero's automatic `preference` binding;
 // this file swaps the per-mode hint, toggles the mode-conditional fields,
 // fills the detected source info (desktop install / bridge plugin location),
-// and wires the restart button.
+// and wires the restart, update (manual check + release notes), install and
+// cleanup buttons.
 
 (function () {
 	'use strict';
@@ -32,6 +33,56 @@
 	function fmtBytes(bytes) {
 		const mb = (Number(bytes) || 0) / (1024 * 1024);
 		return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+	}
+
+	/** Minimal markdown → HTML for GitHub release notes (headings, lists,
+	 * bold/italic/inline-code, fenced code, links, images stripped to their
+	 * alt text). Everything is HTML-escaped BEFORE the tag substitutions, so
+	 * the note body can never inject markup — the only tags in the output are
+	 * the ones produced here. */
+	function mdToHtml(md) {
+		const esc = (s) => String(s)
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+		const inline = (s) => esc(s)
+			.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // image → alt text
+			.replace(/`([^`]+)`/g, '<code>$1</code>')
+			.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+			.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+			.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
+		const out = [];
+		let list = null;
+		let code = null;
+		const flushList = () => {
+			if (list !== null) { out.push(`<ul>${list}</ul>`); list = null; }
+		};
+		for (const raw of String(md ?? '').split(/\r?\n/)) {
+			if (/^\s*```/.test(raw)) {
+				if (code !== null) { out.push(`<pre>${esc(code.join('\n'))}</pre>`); code = null; }
+				else { flushList(); code = []; }
+				continue;
+			}
+			if (code !== null) { code.push(raw); continue; }
+			const line = raw.trimEnd();
+			const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+			if (heading) {
+				flushList();
+				const level = Math.min(heading[1].length + 2, 6); // # → h3 … #### → h6
+				out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+				continue;
+			}
+			const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+			if (bullet) {
+				const item = `<li>${inline(bullet[1])}</li>`;
+				list = list === null ? item : list + item;
+				continue;
+			}
+			flushList();
+			if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+		}
+		flushList();
+		if (code !== null) out.push(`<pre>${esc(code.join('\n'))}</pre>`);
+		return out.join('');
 	}
 
 	function fillSourceInfo(doc) {
@@ -246,6 +297,116 @@
 		});
 	}
 
+	/** The update section: current vs remote version, a manual check button
+	 *  (independent of the weekly auto-check), a download+install button that
+	 *  only unlocks when the check found something newer, and the remote
+	 *  release notes rendered from markdown. One silent check fires when the
+	 *  pane opens so the versions line is informative without a click. */
+	function wireUpdate(doc) {
+		const versions = doc.getElementById('dsh-update-versions');
+		const checkBtn = doc.getElementById('dsh-update-check');
+		const installBtn = doc.getElementById('dsh-update-install');
+		const statusEl = doc.getElementById('dsh-update-status');
+		if (!versions || !checkBtn) return;
+		const api = () => window.Zotero?.DSHinZotero;
+		const show = (text) => {
+			if (statusEl) { statusEl.hidden = !text; statusEl.textContent = text ?? ''; }
+		};
+
+		let current = '';
+		try { current = String(api()?.version?.() ?? ''); }
+		catch (e) { /* cosmetic — label falls back to ？ */ }
+		const paintVersions = (latest, available) => {
+			versions.textContent = `当前版本 ${current || '？'}　·　远端最新 ${latest || '？'}`
+				+ (available ? '（有新版本）' : latest ? '（已是最新）' : '');
+		};
+		paintVersions('', false);
+
+		const fmtDate = (iso) => {
+			try {
+				const d = new Date(iso);
+				if (Number.isNaN(d.getTime())) return '';
+				const two = (n) => String(n).padStart(2, '0');
+				return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+			}
+			catch (e) { return ''; }
+		};
+
+		const renderNotes = (info) => {
+			const box = doc.getElementById('dsh-release-box');
+			const title = doc.getElementById('dsh-release-title');
+			const notes = doc.getElementById('dsh-release-notes');
+			if (!box) return;
+			const body = mdToHtml(info?.notes);
+			if (!body) { box.hidden = true; return; }
+			const date = fmtDate(info?.publishedAt);
+			if (title) title.textContent = `远端发行说明：v${info?.latest ?? ''}${info?.releaseName ? ` ${info.releaseName}` : ''}${date ? `（${date} 发布）` : ''}`;
+			if (notes) notes.innerHTML = body;
+			box.hidden = false;
+		};
+
+		// Links inside the notes open externally — the pane never navigates.
+		const openLink = (url) => {
+			try { window.Zotero?.launchURL?.(url); }
+			catch (e) { try { window.open(url, '_blank'); } catch (e2) { /* give up */ } }
+		};
+		doc.getElementById('dsh-release-notes')?.addEventListener('click', (ev) => {
+			const anchor = ev.target.closest?.('a[href]');
+			if (!anchor) return;
+			ev.preventDefault();
+			openLink(anchor.getAttribute('href'));
+		});
+
+		const runCheck = async () => {
+			const a = api();
+			if (typeof a?.checkUpdate !== 'function' || checkBtn.disabled) return;
+			checkBtn.disabled = true;
+			const prevLabel = checkBtn.label;
+			checkBtn.label = '正在检查…';
+			try {
+				const info = await a.checkUpdate();
+				current = String(info?.current ?? current);
+				paintVersions(info?.latest ?? '', !!info?.updateAvailable);
+				if (installBtn) installBtn.disabled = !info?.updateAvailable;
+				renderNotes(info);
+				show(info?.updateAvailable
+					? `发现新版本 ${info.latest}，点「下载并安装」更新（安装后需重启 Zotero 生效）。`
+					: '已是最新版本。');
+			}
+			catch (e) {
+				show(`检查更新失败：${e?.message ?? e}`);
+			}
+			finally {
+				checkBtn.label = prevLabel;
+				checkBtn.disabled = false;
+			}
+		};
+		checkBtn.addEventListener('command', () => { void runCheck(); });
+
+		installBtn?.addEventListener('command', async () => {
+			const a = api();
+			if (typeof a?.checkUpdate !== 'function' || installBtn.disabled) return;
+			installBtn.disabled = true;
+			const prevLabel = installBtn.label;
+			installBtn.label = '正在下载并安装…';
+			try {
+				const info = await a.checkUpdate({ install: true });
+				if (info?.installed) show(`已下载并安装 ${info.latest}，重启 Zotero 后生效。`);
+				else if (!info?.updateAvailable) show('检查时已是最新版本。');
+			}
+			catch (e) {
+				show(`下载或安装失败：${e?.message ?? e}`);
+				installBtn.disabled = false; // let the user retry without re-checking
+				installBtn.label = prevLabel;
+				return;
+			}
+			installBtn.label = prevLabel;
+		});
+
+		// Fill the remote half of the versions line once, silently.
+		void runCheck();
+	}
+
 	/** The prefs window has no Zotero.ProgressWindow; surface result lines in
 	 * the cleanup status label instead. */
 	function DSHinZoteroPaneToast(doc, text) {
@@ -404,6 +565,7 @@
 		fillInstall(doc);
 		fillCleanup(doc);
 		wireWish(doc);
+		wireUpdate(doc);
 	}
 
 	if (document.readyState === 'loading') {

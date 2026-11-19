@@ -158,7 +158,10 @@ async function main() {
 	check('tool zotero_read (search)', readTool.ok === true && readTool.matches === 1)
 
 	const collectionsTool = await byName.get('zotero_collections').execute({})
-	check('tool zotero_collections', collectionsTool.ok === true && collectionsTool.collections.length === 2)
+	check('tool zotero_collections', collectionsTool.ok === true && collectionsTool.collections.length === 3
+		&& collectionsTool.collections[2].path === '基因编辑 / Cas12i / 结构生物学'
+		&& collectionsTool.collections[2].level === 2
+		&& collectionsTool.tree?.[0]?.children?.[0]?.children?.[0]?.id === 3)
 
 	const updateTool = await byName.get('zotero_update').execute({
 		id: 102,

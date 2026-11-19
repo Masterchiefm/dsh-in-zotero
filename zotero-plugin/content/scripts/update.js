@@ -60,6 +60,10 @@ DSH.Update = (() => {
 			version: tag,
 			name: String(release?.name ?? ''),
 			url: String(release?.html_url ?? ''),
+			// Release notes (markdown body) + publish date, shown by the
+			// settings pane's manual-check section.
+			notes: String(release?.body ?? ''),
+			publishedAt: String(release?.published_at ?? ''),
 			file: asset ? String(asset.name) : `dsh-in-zotero-${tag}.xpi`,
 		};
 	}
@@ -123,6 +127,9 @@ DSH.Update = (() => {
 			latest: release.version,
 			updateAvailable,
 			releaseUrl: release.url,
+			releaseName: release.name,
+			notes: release.notes,
+			publishedAt: release.publishedAt,
 			installed: false,
 		};
 		if (!updateAvailable || !install) {

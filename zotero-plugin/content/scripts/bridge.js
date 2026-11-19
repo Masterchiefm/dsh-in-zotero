@@ -127,7 +127,9 @@ DSH.Bridge = (() => {
 	// ---------------------------------------------------------------- ops
 
 	async function opStatus() {
-		const collections = Zotero.Collections.getByLibrary(userLibraryID(), false, false) ?? [];
+		// recursive=true: count EVERY collection, not just top-level ones (the
+		// non-recursive form filters on !parentKey — see opCollections).
+		const collections = Zotero.Collections.getByLibrary(userLibraryID(), true, false) ?? [];
 		let itemCount = 0;
 		try {
 			const s = new Zotero.Search();
@@ -237,28 +239,58 @@ DSH.Bridge = (() => {
 
 	async function opCollections() {
 		const libraryID = userLibraryID();
-		const all = Zotero.Collections.getByLibrary(libraryID, false, false) ?? [];
+		// recursive=true is what makes subcollections appear at all: the
+		// non-recursive form of getByLibrary returns TOP-LEVEL collections
+		// only (it filters on !parentKey), which used to hide every nested
+		// collection from the agent. The recursive walk yields parents before
+		// their descendants, so both views below come out in tree order.
+		const all = Zotero.Collections.getByLibrary(libraryID, true, false) ?? [];
+		const byID = new Map(all.map((c) => [c.id, c]));
 		const childCollections = new Map();
+		const itemCount = new Map();
 		for (const c of all) {
 			if (c.parentID) childCollections.set(c.parentID, (childCollections.get(c.parentID) ?? 0) + 1);
-		}
-		const rows = all.map((c) => {
-			let items = 0;
 			try {
-				items = c.getChildItems(true).length;
+				itemCount.set(c.id, c.getChildItems(true).length);
 			}
-			catch (e) { /* keep 0 */ }
+			catch (e) { itemCount.set(c.id, 0); }
+		}
+		const nameOf = (c) => String(c.name ?? '');
+		// Full path ("父 / 子 / 孙") + 0-based depth, computed from the parent
+		// chain rather than Zotero's optional .level expando.
+		const pathOf = (c) => {
+			const parts = [nameOf(c)];
+			let parent = c.parentID ? byID.get(c.parentID) : null;
+			for (let guard = 0; parent && guard < 32; guard++) {
+				parts.unshift(nameOf(parent));
+				parent = parent.parentID ? byID.get(parent.parentID) : null;
+			}
+			return { path: parts.join(' / '), level: parts.length - 1 };
+		};
+		const rows = all.map((c) => {
+			const { path, level } = pathOf(c);
 			return {
 				id: c.id,
 				key: c.key,
 				name: c.name,
 				parentID: c.parentID ?? null,
+				path,
+				level,
 				subcollections: childCollections.get(c.id) ?? 0,
-				items,
+				items: itemCount.get(c.id) ?? 0,
 			};
 		});
-		rows.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'));
-		return { ok: true, collections: rows };
+		// Same data as a nested tree — the agent sees the full hierarchy in
+		// one shot instead of reconstructing it from parentIDs.
+		const treeOf = (parentID) => all
+			.filter((c) => (c.parentID || null) === parentID)
+			.map((c) => ({
+				id: c.id,
+				name: nameOf(c),
+				items: itemCount.get(c.id) ?? 0,
+				children: treeOf(c.id),
+			}));
+		return { ok: true, collections: rows, tree: treeOf(null) };
 	}
 
 	async function opRead(payload = {}) {

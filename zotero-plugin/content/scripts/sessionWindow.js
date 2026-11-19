@@ -378,6 +378,54 @@ DSH.SessionWindow = (() => {
 		root.style.height = `${box.height}px`;
 	}
 
+	/** applyBox minus the height write while collapsed — a collapsed panel's
+	 * height is auto until re-expanded, and setting it would un-collapse it. */
+	function placePanel(box) {
+		const root = state.panel?.root;
+		if (!root) return;
+		root.style.left = `${box.left}px`;
+		root.style.top = `${box.top}px`;
+		root.style.width = `${box.width}px`;
+		if (!state.collapsed) root.style.height = `${box.height}px`;
+	}
+
+	/** Over half the panel outside the window? Snap it fully inside against
+	 * the NEAREST edge (right/left, bottom/top). A position saved while the
+	 * window was maximized (panel flush right) survives the window being
+	 * restored smaller as an 80px sliver otherwise — clampBox deliberately
+	 * allows mostly-offscreen parking during drags, so it can't fix this. */
+	function snapBoxInside(box) {
+		const win = state.window;
+		if (!win) return box;
+		const MARGIN = 16;
+		const W = win.innerWidth;
+		const H = win.innerHeight;
+		const width = Math.max(PANEL_MIN.width, Math.min(box.width, W - 2 * MARGIN));
+		const height = Math.max(PANEL_MIN.height, Math.min(box.height, H - 2 * MARGIN));
+		let { left, top } = box;
+		if (Math.min(left + width, W) - Math.max(left, 0) < width / 2) {
+			// Panel centre right of the window centre → hug the right edge.
+			left = (left + width / 2 >= W / 2) ? W - width - MARGIN : MARGIN;
+		}
+		if (Math.min(top + height, H) - Math.max(top, 0) < height / 2) {
+			top = (top + height / 2 >= H / 2) ? H - height - MARGIN : MARGIN;
+		}
+		return { left, top, width, height };
+	}
+
+	/** Re-place the panel from its saved box: clamped to the window, and when
+	 * more than half of it would sit outside, snapped fully inside against the
+	 * nearest edge. Persists the moved position so the fix survives restarts. */
+	function repositionPanel() {
+		const before = currentBox();
+		const after = clampBox(snapBoxInside(before));
+		placePanel(after);
+		if (!state.collapsed
+			&& (before.left !== after.left || before.top !== after.top)) {
+			saveBox();
+		}
+	}
+
 	function saveBox() {
 		const root = state.panel?.root;
 		if (!root) return;
@@ -521,10 +569,12 @@ DSH.SessionWindow = (() => {
 		root.style.display = 'none'; // see hidePanel: display beats the UA [hidden] rule
 		root.setAttribute('data-collapsed', 'false');
 		applyBox(clampBox(currentBox()));
-		// Keep the panel on screen when the window shrinks.
+		// Keep the panel on screen when the window shrinks — including the
+		// maximized-then-restored case, where the saved position leaves most
+		// of the panel outside and snapBoxInside pulls it back in.
 		win.addEventListener('resize', () => {
 			if (!state.panel || root.getAttribute('hidden') === 'true') return;
-			applyBox(clampBox(currentBox()));
+			repositionPanel();
 		});
 		return state.panel;
 	}
@@ -532,6 +582,10 @@ DSH.SessionWindow = (() => {
 	function showPanel() {
 		const panel = state.panel;
 		if (!panel) return;
+		// Offscreen guard before revealing: a position saved in a bigger window
+		// (e.g. maximized, panel flush against its right edge) can leave most
+		// of the panel outside the current, smaller one — snap it inside first.
+		repositionPanel();
 		panel.root.removeAttribute('hidden');
 		// Toggle display explicitly: the UA sheet's [hidden]{display:none} loses
 		// to our own `.dsh-panel-host { display: flex }` (author > UA), so the

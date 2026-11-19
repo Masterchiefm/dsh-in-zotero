@@ -127,9 +127,25 @@
 	</groupbox>
 
 	<groupbox>
-		<label><html:h2>应用更改</html:h2></label>
-		<checkbox label="每周自动检查更新（发现新版本时自动下载安装，GitHub 不可达时走 CDN 镜像）"
+		<label><html:h2>插件更新</html:h2></label>
+		<checkbox label="每周自动检查更新（发现新版本时自动下载并安装，GitHub 不可达时走 CDN 镜像）"
 			preference="extensions.zotero.dsh-in-zotero.autoUpdate"/>
+		<label class="dsh-hint">自动检查每周至多一次、静默进行；无论开关如何，都可在下方手动检查并查看远端发行说明。</label>
+		<hbox align="center">
+			<label id="dsh-update-versions" flex="1">当前版本 …　·　远端最新 …</label>
+			<button id="dsh-update-check" label="检查更新"/>
+			<button id="dsh-update-install" label="下载并安装" disabled="true"/>
+		</hbox>
+		<label class="dsh-hint" id="dsh-update-status" hidden="true"/>
+		<vbox id="dsh-release-box" hidden="true">
+			<html:h3 id="dsh-release-title" style="margin: 6px 0 2px; font-weight: 600;">远端发行说明</html:h3>
+			<html:div id="dsh-release-notes" class="dsh-release-notes"
+				style="max-height: 280px; overflow-y: auto; padding: 6px 10px; line-height: 1.5; border: 1px solid var(--fill-quinary, rgba(128,128,128,.35)); border-radius: 5px;"/>
+		</vbox>
+	</groupbox>
+
+	<groupbox>
+		<label><html:h2>应用更改</html:h2></label>
 		<label class="dsh-hint">设置在改动时即时保存。点击按钮停止当前 dsh 服务并立即按新设置重启；重启期间可在上方查看进度。</label>
 		<button id="dsh-restart-button" label="保存设置并重启服务"/>
 		<label class="dsh-hint" id="dsh-restart-status" hidden="true"/>

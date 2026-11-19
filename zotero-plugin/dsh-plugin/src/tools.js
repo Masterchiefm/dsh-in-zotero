@@ -101,7 +101,7 @@ export function createTools({ logger = console } = {}) {
     }),
     makeTool({
       name: 'zotero_collections',
-      description: '列出用户文库的全部分类（id、名称、父分类、子分类数、条目数）。整理归类前先看它，再决定新建或复用分类。',
+      description: '列出用户文库的全部分类（含所有层级的子分类），一次看清嵌套结构：collections 平铺清单每行含 id、名称、完整路径 path（「父 / 子 / 孙」）、parentID、level（顶层为 0）、直接子分类数、条目数，父分类排在子孙前；tree 是同一份数据的嵌套树。整理归类前先看它，再决定新建或复用分类；后续引用分类一律用行里的数字 id。',
       properties: {},
       async execute() {
         return call('collections', {}, { timeoutMs: 30_000 })

@@ -10,3 +10,10 @@
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Local agent-tool memory
+.workbuddy/
+
+# Demo/promo media — kept local; scripts/demo holds the build scripts
+docs/*.mp4
+scripts/demo/promo-assets/

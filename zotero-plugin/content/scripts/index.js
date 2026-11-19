@@ -52,9 +52,16 @@ DSH.UI = (() => {
 		const button = doc.createXULElement('toolbarbutton');
 		button.id = TOOLBAR_BUTTON_ID;
 		button.className = 'zotero-tb-button';
-		button.setAttribute('tooltiptext', '打开 DSH 悬浮对话窗（加载一次后常驻，秒开）');
+		button.setAttribute('tooltiptext', '打开 DSH 悬浮对话窗（已显示时点击收起）');
 		button.setAttribute('style', 'list-style-image: url(chrome://dsh-in-zotero/content/icons/icon.svg)');
 		button.addEventListener('command', () => {
+			// Toggle: while the floating panel is up, the click hides it again
+			// (page + sidecar stay warm — the next click is instant). The tab
+			// host keeps its open semantics; it has its own close affordance.
+			if (DSH.SessionWindow.state.host === 'panel') {
+				DSH.SessionWindow.close();
+				return;
+			}
 			void openSessionWindow('list');
 		});
 		// "在『新建条目』『通过标识符添加条目』那条按钮组的最后"：append after the
@@ -238,6 +245,11 @@ Zotero.DSHinZotero = {
 	/** Registered dsh models (settings pane's translate-model picker). */
 	listModels() {
 		return DSH.Sidecar.listModels();
+	},
+	/** Installed plugin version (settings pane's update section shows it next
+	 * to the remote latest). */
+	version() {
+		return ctx.VERSION;
 	},
 	/** Check GitHub for a newer release; opts.install downloads & installs it.
 	 * opts.forceVersion fakes the installed version (debug/testing). */

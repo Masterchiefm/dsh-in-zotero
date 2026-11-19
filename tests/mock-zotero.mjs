@@ -19,9 +19,26 @@ const LIBRARY = [
 	},
 ]
 
+// Mirrors bridge.js opCollections' shape: a flat row list (full "父 / 子 / 孙"
+// path + level, parents before children) plus the same data as a nested tree.
 const COLLECTIONS = [
-	{ id: 1, key: 'COLL0001', name: '基因编辑', parentID: null, subcollections: 1, items: 2 },
-	{ id: 2, key: 'COLL0002', name: 'Cas12i', parentID: 1, subcollections: 0, items: 1 },
+	{ id: 1, key: 'COLL0001', name: '基因编辑', parentID: null, path: '基因编辑', level: 0, subcollections: 1, items: 2 },
+	{ id: 2, key: 'COLL0002', name: 'Cas12i', parentID: 1, path: '基因编辑 / Cas12i', level: 1, subcollections: 1, items: 1 },
+	{ id: 3, key: 'COLL0003', name: '结构生物学', parentID: 2, path: '基因编辑 / Cas12i / 结构生物学', level: 2, subcollections: 0, items: 1 },
+]
+
+const COLLECTION_TREE = [
+	{
+		id: 1, name: '基因编辑', items: 2,
+		children: [
+			{
+				id: 2, name: 'Cas12i', items: 1,
+				children: [
+					{ id: 3, name: '结构生物学', items: 1, children: [] },
+				],
+			},
+		],
+	},
 ]
 
 const FULLTEXT = 'CRISPR-Cas12i is a Class 2 type V-B effector. The structure reveals a bilobed architecture with a recognition (REC) lobe and a nuclease (NUC) lobe. The seed sequence of the crRNA interacts with the target DNA strand. Picosecond dynamics were measured at 298 K.'
@@ -74,7 +91,7 @@ export function startMockZotero({ port = 0, token = 'test-token' } = {}) {
 					})
 				}
 				case 'collections':
-					return send(200, { ok: true, collections: COLLECTIONS })
+					return send(200, { ok: true, collections: COLLECTIONS, tree: COLLECTION_TREE })
 				case 'read': {
 					const found = LIBRARY.find(item => item.id === Number(payload.id)) ?? LIBRARY.find(item => item.id === Number(payload.id) - 1000)
 					if (!found) return send(404, { ok: false, error: { code: 'zotero/no-item', message: 'not found' } })
