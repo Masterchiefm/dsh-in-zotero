@@ -24,6 +24,19 @@ function userMessage(text) {
   }
 }
 
+/** Human-readable label for a route; falls back to the 'provider/model' id
+ * when the registry can't name it. */
+async function routeLabel(llm, route) {
+  const id = `${route.provider}/${route.model}`
+  try {
+    const rows = await llm.listModels(route.provider)
+    const hit = (rows ?? []).find(m => m?.id === route.model)
+    if (hit?.name) return { id, name: String(hit.name) }
+  }
+  catch { /* registry unavailable — the id is still truthful */ }
+  return { id, name: id }
+}
+
 function resolveRoute(extensions, explicitModel = '') {
   // An explicit 'provider/model' (translate-model picker) wins over dsh's
   // current selection. Both ids are registry ids without embedded slashes.
@@ -44,17 +57,33 @@ function resolveRoute(extensions, explicitModel = '') {
   )
 }
 
-function configureControls(thinking) {
+/**
+ * Build the prepareCall configure callback. `state` captures what was
+ * actually applied (the callback is the only place the adapter's model
+ * metadata — including its own effort vocabulary — is visible).
+ *
+ * The effort id for "off" is NOT uniform across adapters: dsh-llm-deepseek
+ * says 'off', declared catalog menus say 'disabled', and budget-ladder
+ * models (our-free-model) have no off at all — thinking shares their output
+ * ceiling and can only be shrunk. Leaving the control unset when 'off' is
+ * absent made dsh fall back to the model's defaultEffort (usually high):
+ * thinking streamed despite the toggle being off, per selected model.
+ */
+function configureControls(thinking, state) {
   return (controls, model) => {
     const efforts = model?.reasoning?.efforts ?? []
     if (efforts.length === 0) return controls
     const ids = efforts.map(effort => effort.id)
     if (thinking) {
       const pick = ids.includes('high') ? 'high' : ids[ids.length - 1]
+      state.effort = pick
       return { ...controls, reasoningEffort: pick }
     }
-    if (ids.includes('off')) return { ...controls, reasoningEffort: 'off' }
-    return controls
+    const offish = ids.find(id => id === 'off' || id === 'disabled' || id === 'none')
+    const pick = offish ?? ids[0] // lowest declared rung ≈ closest to off
+    state.effort = pick
+    state.offAvailable = offish !== undefined
+    return { ...controls, reasoningEffort: pick }
   }
 }
 
@@ -96,7 +125,10 @@ export function createTranslator({ extensions, logger }) {
 
   /**
    * Run one translation; returns an NDJSON Response of
-   * {type:'thinking'|'answer'|'done'|'error'} lines.
+   * {type:'meta'|'thinking'|'answer'|'done'|'error'} lines — meta (the
+   * resolved model, {model:name, id:'provider/model'}, plus what was applied
+   * for thinking: {thinkingRequested, thinkingEffort, thinkingForced}) is the
+   * first line, sent before the first chunk.
    * opts.model: explicit 'provider/model' from the translate-model picker;
    * empty = dsh's current selection.
    */
@@ -134,11 +166,24 @@ export function createTranslator({ extensions, logger }) {
           try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* closed */ }
         }
         try {
+          // The configure callback is the only place the adapter's model
+          // metadata (its own effort vocabulary) is visible — capture what
+          // was applied, then report it in meta before the first chunk.
+          const applied = { effort: null, offAvailable: false }
           const call = await llm.prepareCall(
             { provider: route.provider, model: route.model, maxTokens: thinking ? MAX_TOKENS_THINKING : MAX_TOKENS_PLAIN },
             abort.signal,
-            configureControls(thinking)
+            configureControls(thinking, applied)
           )
+          send({
+            type: 'meta',
+            ...(await routeLabel(llm, route)),
+            thinkingRequested: thinking,
+            thinkingEffort: applied.effort,
+            // Toggle was off but the model has no off level — the lowest
+            // rung was forced instead (it may still think a little).
+            thinkingForced: !thinking && applied.effort !== null && !applied.offAvailable,
+          })
           const options = {
             ...call.config,
             messages: [userMessage(body)],

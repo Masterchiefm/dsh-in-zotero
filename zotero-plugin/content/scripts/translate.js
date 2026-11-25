@@ -90,6 +90,10 @@ DSH.Translate = (() => {
 	font-size: 13px; line-height: 1.5; color: var(--fill-primary);
 	white-space: pre-wrap; word-break: break-word;
 }
+.dsh-translate-section .dsh-model {
+	margin: 0 0 3px; color: var(--fill-secondary); font-size: 11px;
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .dsh-translate-section .dsh-status { display: flex; align-items: center; min-height: 16px; }
 .dsh-translate-section .dsh-status .dsh-waking {
 	color: var(--fill-secondary); font-size: 12px; margin-inline-start: 6px;
@@ -355,12 +359,30 @@ DSH.Translate = (() => {
 
 			let answerEl = null;
 			let actionsEl = null;
+			let modelEl = null;
 			let answerText = '';
 			let sawThinking = false;
+			// The stream's meta said the model has no true off level (the
+			// lowest effort was forced instead) — if thinking arrives anyway,
+			// explain at done time instead of looking like the toggle broke.
+			let thinkingForced = false;
 			const thinkingRequested = !!DSH.Util.prefGet('translateThinking', false);
 			// '' (or unset) = inherit dsh's current model selection; otherwise a
 			// 'provider/model' id chosen in the settings pane.
 			const translateModel = String(DSH.Util.prefGet('translateModel', '') || '').trim();
+			// The stream's first line names the model it resolved to (dsh's
+			// current selection, or the settings-pane pick). Shown as a small
+			// muted line at the top of the section.
+			const showModel = (name) => {
+				if (!name) return;
+				if (!modelEl) {
+					modelEl = doc.createElement('div');
+					modelEl.className = 'dsh-model';
+					section.appendChild(modelEl);
+				}
+				modelEl.textContent = `模型：${name}`;
+				modelEl.title = name;
+			};
 			const renderAnswer = () => {
 				if (!answerEl) {
 					collapseThink();
@@ -451,7 +473,11 @@ DSH.Translate = (() => {
 							if (active.get(readerKey) === entry) abortActive(readerKey);
 							return;
 						}
-						if (evt.type === 'thinking') {
+						if (evt.type === 'meta') {
+							showModel(evt.model ?? evt.id ?? '');
+							thinkingForced = !!evt.thinkingForced;
+						}
+						else if (evt.type === 'thinking') {
 							sawThinking = true;
 							appendThink(evt.text ?? '');
 							scheduleFit();
@@ -472,6 +498,14 @@ DSH.Translate = (() => {
 								const hint = doc.createElement('div');
 								hint.className = 'dsh-no-think';
 								hint.textContent = '（当前模型未返回思考内容）';
+								section.appendChild(hint);
+							}
+							// 反向情形：开关关了但模型没有真正的关档（meta 已
+							// 说明被迫用了最低档），思考还是流出来了——同样说明。
+							else if (!thinkingRequested && sawThinking && thinkingForced) {
+								const hint = doc.createElement('div');
+								hint.className = 'dsh-no-think';
+								hint.textContent = '（当前模型不支持完全关闭思考，已按最低思考档请求）';
 								section.appendChild(hint);
 							}
 							showActions();
