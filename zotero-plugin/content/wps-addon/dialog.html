@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Zotero</title>
+<style>
+	html, body { margin: 0; height: 100%; }
+	body {
+		display: flex; flex-direction: column;
+		box-sizing: border-box; height: 100vh; padding: 18px 20px 14px;
+		font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+		font-size: 13px; color: #222; background: #fff; user-select: none;
+	}
+	.row { display: flex; align-items: flex-start; flex: 1; min-height: 0; }
+	.icon {
+		flex: none; width: 30px; height: 30px; margin-right: 12px; border-radius: 50%;
+		display: flex; align-items: center; justify-content: center;
+		font-size: 17px; font-weight: 700; color: #fff;
+	}
+	.icon.stop { background: #d93025; }
+	.icon.notice { background: #2f6fd6; }
+	.icon.caution { background: #e8a000; }
+	.text { flex: 1; line-height: 1.65; white-space: pre-wrap; word-break: break-word; overflow-y: auto; max-height: 100%; user-select: text; }
+	.buttons { flex: none; display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+	button {
+		min-width: 78px; height: 30px; padding: 0 14px; border-radius: 4px;
+		border: 1px solid #c6c6c6; background: #f5f5f5; color: #222;
+		font-size: 13px; font-family: inherit; cursor: pointer;
+	}
+	button:hover { background: #ececec; }
+	button.primary { background: #bb1f2a; border-color: #a11a24; color: #fff; }
+	button.primary:hover { background: #a81a25; }
+	button:focus { outline: 2px solid #8fb3f0; outline-offset: 1px; }
+</style>
+</head>
+<body>
+<div class="row">
+	<div class="icon notice" id="icon">ℹ</div>
+	<div class="text" id="text"></div>
+</div>
+<div class="buttons" id="buttons"></div>
+<script>
+// 对话框页：参数由主页面（js/dialog.js）放进 wps.PluginStorage，结果经同一个存储回传。
+// 任何一步拿不到参数都直接关掉自己，绝不留下一个谁也关不掉的空窗口。
+(function () {
+	// PluginStorage 从主页面同步到这个页面有几十到一百多毫秒的延迟，启动时参数可能还没到：
+	// 读不到先等一等，等不到就显示一条能关窗的提示并按「取消」回传。
+	var SPEC_WAIT_MS = 2000;
+	var BEAT_MS = 250;
+	var id = new URLSearchParams(location.search).get('id') || '';
+	var key = 'zotero-wps-dialog.' + id;
+	var resultKey = key + '.result';
+	var aliveKey = key + '.alive';
+	var closedKey = key + '.closed';
+	var done = false;
+	var spec = null;
+
+	function write(name, value) {
+		try {
+			wps.PluginStorage.setItem(name, value);
+			return true;
+		}
+		catch (e) {
+			return false;
+		}
+	}
+
+	function readSpec() {
+		try {
+			return JSON.parse(wps.PluginStorage.getItem(key) || 'null');
+		}
+		catch (e) {
+			return null;
+		}
+	}
+
+	// 开着期间一直报活（直到页面卸载）：主页面据此判断窗口是不是还在、有没有真的关掉
+	var beat = setInterval(function () { write(aliveKey, String(Date.now())); }, BEAT_MS);
+	write(aliveKey, String(Date.now()));
+
+	function answer(value) {
+		if (done) return;
+		done = true;
+		write(resultKey, String(value));
+		// 让点击的视觉反馈停留一瞬再关窗
+		setTimeout(function () { window.close(); }, 60);
+	}
+
+	function button(label, primary, onClick) {
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.textContent = label;
+		if (primary) b.className = 'primary';
+		b.addEventListener('click', onClick);
+		return b;
+	}
+
+	function start() {
+		var ICON_CLASS = { 0: 'stop', 1: 'notice', 2: 'caution' };
+		var ICON_GLYPH = { 0: '✕', 1: 'ℹ', 2: '⚠' };
+		var icon = document.getElementById('icon');
+		icon.className = 'icon ' + (ICON_CLASS[spec.icon] || 'notice');
+		icon.textContent = ICON_GLYPH[spec.icon] || 'ℹ';
+		document.getElementById('text').textContent = String(spec.text ?? '');
+
+		var values = Array.isArray(spec.values) ? spec.values : [1];
+		var labels = Array.isArray(spec.labels) ? spec.labels : ['确定'];
+		var box = document.getElementById('buttons');
+		var buttons = [];
+		for (var i = 0; i < labels.length; i++) {
+			(function (index) {
+				// 第一个按钮是默认动作（回车），最后一个通常是取消
+				var b = button(labels[index], index === 0, function () { answer(values[index]); });
+				if (index === 0) b.setAttribute('data-default', '1');
+				box.appendChild(b);
+				buttons.push(b);
+			})(i);
+		}
+		if (buttons.length) buttons[0].focus();
+
+		document.addEventListener('keydown', function (event) {
+			if (event.key === 'Enter') {
+				event.preventDefault();
+				answer(values[0]);
+			}
+			else if (event.key === 'Escape') {
+				event.preventDefault();
+				// 只有确实存在「取消」键时 Esc 才等于取消；单一「确定」框里 Esc 也走确定
+				answer(buttons.length > 1 ? values[values.length - 1] : values[0]);
+			}
+		});
+	}
+
+	function failed() {
+		document.getElementById('text').textContent = 'Zotero 的提示框没能正确打开（没有收到提示内容），本次操作已按「取消」处理。请关闭这个窗口后重试。';
+		document.getElementById('buttons').appendChild(button('关闭', true, function () { answer(0); }));
+	}
+
+	// 用户点了窗口的关闭按钮（或 WPS 自己把窗口关了）：按「取消」回传，Zotero 那边的事务才能收尾
+	window.addEventListener('beforeunload', function () {
+		if (done) return;
+		done = true;
+		write(resultKey, String(spec ? spec.cancel : 0));
+	});
+
+	// 页面卸载了才算窗口真的在关：主页面要等这个信号才弹下一个对话框
+	function markClosed() { write(closedKey, '1'); }
+	window.addEventListener('pagehide', markClosed);
+	window.addEventListener('unload', markClosed);
+
+	spec = readSpec();
+	if (spec) {
+		start();
+		return;
+	}
+	var waited = 0;
+	var timer = setInterval(function () {
+		spec = readSpec();
+		waited += 50;
+		if (!spec && waited < SPEC_WAIT_MS) return;
+		clearInterval(timer);
+		if (spec) start();
+		else failed();
+	}, 50);
+})();
+</script>
+</body>
+</html>

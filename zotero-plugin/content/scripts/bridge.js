@@ -1602,6 +1602,57 @@ DSH.Bridge = (() => {
 		return { ok: true, ...Zotero.DSHinZotero.httpServerStatus() };
 	}
 
+	// --- WPS 文字引用加载项 ------------------------------------------------------
+
+	/** 状态 → 给人看的一句话（设置面板与 agent 工具共用）。 */
+	function wpsStatusText(status) {
+		if (!status.wps) return '没有检测到 WPS 文字。';
+		if (status.healthy) return `WPS 文字引用加载项工作正常（WPS ${status.wps.version || ''}，加载项 v${status.addon.version}）。`;
+		return `WPS 文字引用需要修复：${status.issues.join('；')}。`;
+	}
+
+	/** 修复之后用户要做的事（文案只讲动作，不讲内部文件）。 */
+	function wpsNextSteps(changed) {
+		return [
+			'完全退出 WPS（关掉所有 WPS 窗口），然后重新打开',
+			changed ? '打开文档时 WPS 会弹一次「加载项“zotero-in-wps”首次加载，是否信任？」（升级后是「已经被修改，是否继续加载？」）——点「确定」' : null,
+			'在 WPS 文字里打开一个文档，功能区里会出现「Zotero」选项卡：添加/编辑引文、添加/编辑书目、文档首选项、刷新等',
+			'插引文时弹出的选择窗口属于 Zotero，操作期间保持 Zotero 在运行',
+		].filter(Boolean);
+	}
+
+	async function opWpsStatus() {
+		const status = await DSH.WPS.status();
+		return { ...status, message: wpsStatusText(status) };
+	}
+
+	/** 一键修复：安装/更新加载项并重写登记；内容已正确时不动文件（不触发 WPS 的
+	 * 「已修改」确认）。payload { force?: bool } 强制重写。修不了时抛带原因的错误
+	 * （没装 WPS、文件写不进去），agent 工具和设置面板拿到的都是同一句话。 */
+	async function opWpsFix(payload = {}) {
+		const result = await DSH.WPS.install({ force: payload.force === true });
+		if (!result.ok) throw fail(result.code ?? 'zotero/wps-repair-failed', result.message);
+		if (result.changed) result.message += ' 重启 WPS 后生效。';
+		result.nextSteps = wpsNextSteps(result.changed);
+		return result;
+	}
+
+	async function opWpsUninstall() {
+		const result = await DSH.WPS.uninstall();
+		result.nextSteps = ['重启 WPS 后「Zotero」选项卡消失'];
+		return result;
+	}
+
+	/** Test/diagnostic for the WPS add-in. payload { action: 'status' (default) |
+	 * 'install' | 'uninstall', force?: bool } — same code paths as the settings
+	 * pane's button and the agent tool. */
+	async function opDebugWps(payload = {}) {
+		const action = String(payload.action ?? 'status');
+		if (action === 'install') return { ok: true, ...await DSH.WPS.install({ force: payload.force === true }) };
+		if (action === 'uninstall') return { ok: true, ...await DSH.WPS.uninstall() };
+		return { ok: true, ...await DSH.WPS.status() };
+	}
+
 	const OPS = {
 		status: opStatus,
 		search: opSearch,
@@ -1622,6 +1673,9 @@ DSH.Bridge = (() => {
 		'reader.locate': opReaderLocate,
 		'reader.annotate': opReaderAnnotate,
 		notes: opNotes,
+		'wps.status': opWpsStatus,
+		'wps.fix': opWpsFix,
+		'wps.uninstall': opWpsUninstall,
 		'debug.open': opDebugOpen,
 		'debug.state': opDebugState,
 		'debug.detect': opDebugDetect,
@@ -1634,6 +1688,7 @@ DSH.Bridge = (() => {
 		'debug.refetch': opDebugRefetch,
 		'debug.update': opDebugUpdate,
 		'debug.httpserver': opDebugHttpServer,
+		'debug.wps': opDebugWps,
 	};
 
 	function register() {

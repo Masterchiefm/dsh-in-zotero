@@ -30,6 +30,17 @@
 	</groupbox>
 
 	<groupbox>
+		<label><html:h2>WPS 文字引用</html:h2></label>
+		<label class="dsh-hint" id="dsh-wps-status">正在检测 WPS 与加载项状态…</label>
+		<hbox align="center">
+			<button id="dsh-wps-fix" label="一键修复 WPS Zotero 引用"/>
+			<button id="dsh-wps-uninstall" label="卸载" disabled="true"/>
+		</hbox>
+		<label class="dsh-hint" id="dsh-wps-result" hidden="true" style="white-space: pre-wrap;"/>
+		<label class="dsh-hint">给 WPS 文字装上与 Word 版同款的 Zotero 引用：「Zotero」选项卡（添加/编辑引文、添加/编辑书目、文档首选项、刷新、取消链接等），文档格式与 Word 版互通。走 WPS 官方 JS 加载项——个人版可用、不需要 VBA、不联网、不需要管理员权限。WPS 里没有 Zotero 选项卡、点了没反应或提示连不上 Zotero 时点「一键修复」；安装或升级后需重启 WPS，首次加载时 WPS 会问一次是否信任该加载项，点「确定」即可。</label>
+	</groupbox>
+
+	<groupbox>
 		<label><html:h2>新功能许愿 / bug 修复</html:h2></label>
 		<label class="dsh-hint">想给本插件加新功能，或遇到了 bug？点下方按钮打开 DSH 悬浮窗，直接对 AI 描述需求：它会克隆本插件源码、动手实现或修复，改完还会问你要不要向仓库提交 PR。</label>
 		<button id="dsh-wish-button" label="许愿新功能 / 修复 bug（打开 DSH 对话）"/>

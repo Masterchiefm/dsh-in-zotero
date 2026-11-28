@@ -43,6 +43,18 @@ const COLLECTION_TREE = [
 
 const FULLTEXT = 'CRISPR-Cas12i is a Class 2 type V-B effector. The structure reveals a bilobed architecture with a recognition (REC) lobe and a nuclease (NUC) lobe. The seed sequence of the crRNA interacts with the target DNA strand. Picosecond dynamics were measured at 298 K.'
 
+// Mirrors DSH.WPS.status()/install()'s shape (a healthy WPS add-in installation).
+const WPS_STATUS = {
+	ok: true, healthy: true, issues: [],
+	wps: { version: '12.1.0.29690', dir: 'C:/fake/Kingsoft/WPS Office/12.1.0.29690' },
+	addon: { name: 'zotero-in-wps', version: '1.0.0', dir: 'C:/fake/jsaddons/zotero-in-wps_1.0.0' },
+	installed: true, upToDate: true, registered: true,
+}
+const WPS_NEXT_STEPS = [
+	'完全退出 WPS（关掉所有 WPS 窗口），然后重新打开',
+	'在 WPS 文字里打开一个文档，功能区里会出现「Zotero」选项卡：添加/编辑引文、添加/编辑书目、文档首选项、刷新等',
+]
+
 export function startMockZotero({ port = 0, token = 'test-token' } = {}) {
 	const calls = []
 	const updates = []
@@ -135,6 +147,12 @@ export function startMockZotero({ port = 0, token = 'test-token' } = {}) {
 					] })
 				case 'open':
 					return send(200, { ok: true, opened: 'C:/fake/x.pdf' })
+				case 'wps.status':
+					return send(200, { ...WPS_STATUS, message: 'WPS 文字引用加载项工作正常（WPS 12.1.0.29690，加载项 v1.0.0）。' })
+				case 'wps.fix':
+					return send(200, { ...WPS_STATUS, changed: false, reinstall: true, message: 'WPS 引用加载项状态正常，无需修复。', nextSteps: WPS_NEXT_STEPS })
+				case 'wps.uninstall':
+					return send(200, { ok: true, message: '已卸载 WPS 引用加载项。', nextSteps: ['重启 WPS 后「Zotero」选项卡消失'] })
 				default:
 					return send(400, { ok: false, error: { code: 'zotero/unknown-op', message: `unknown op ${op}` } })
 			}

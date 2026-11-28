@@ -107,6 +107,14 @@ dsh 获得 21 个 `zotero_*` 工具：检索、读全文（真实路径）、改
 
 每周自动检查 GitHub Release，发现新版本自动下载安装（GitHub 直连失败时自动走 CDN 镜像），重启 Zotero 生效；也可在设置里关闭，手动从 Releases 页下载。
 
+### WPS 文字里的 Zotero 引用（0.1.24 新增）
+
+给 WPS 文字装上与 Word 版同款的 Zotero 引用：WPS 里出现「Zotero」选项卡（添加/编辑引文、插入笔记/批注、添加/编辑书目、文档首选项、刷新、取消引文链接），保存出来的文档格式与 Word 版互通（在 Word 和 WPS 之间来回改都能识别）。走 WPS 官方 JS 加载项通道——**个人版可用、不需要 VBA、不联网、不需要管理员权限**。
+
+**入口**：Zotero 设置 → dsh-in-zotero → 「WPS 文字引用」→ 一键修复；agent（dsh 对话里）也可以直接让它「修复 WPS 引用」（`zotero_wps_fix` 工具）。装完重启 WPS，首次加载时 WPS 会问一次「是否信任该加载项」，点「确定」即可。
+
+> 提示：若之前装过官方 Zotero 的 Word 插件（`%APPDATA%\Microsoft\Word\STARTUP\Zotero.dotm`），WPS 会兼容加载出第二个英文「Zotero」选项卡——它在 WPS 个人版里因缺少 VBA 无法工作，可在 Word 里正常使用，或从 Word 的启动项里移除。
+
 ## 快速上手
 
 1. **配置 dsh**：装了 [dsh 桌面版](https://www.deepseek.com/harness/) 的话插件会自动检测（检测不到时在设置里手动指定安装目录）；没有桌面版就走内置运行时（首次使用自动 `npm install`，需 Node ≥ 24.9）

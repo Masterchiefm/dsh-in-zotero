@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "dsh-in-zotero",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "Integrate DeepSeek Harness (dsh) into Zotero: native dsh session window, reader assistant per article, streaming selection translation, and AI metadata refetch — all library writes go through Zotero's own APIs.",
   "homepage_url": "https://github.com/deepseek-harness/dsh-in-zotero",
   "author": "dsh-in-zotero contributors",

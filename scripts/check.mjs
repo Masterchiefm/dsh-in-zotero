@@ -15,6 +15,7 @@ const groups = [
 		path.join(ROOT, 'scripts', 'build-xpi.mjs'),
 		path.join(ROOT, 'scripts', 'install-runtime.mjs'),
 		path.join(ROOT, 'scripts', 'check.mjs'),
+		path.join(ROOT, 'tests', 'wps.test.mjs'),
 	] },
 ]
 

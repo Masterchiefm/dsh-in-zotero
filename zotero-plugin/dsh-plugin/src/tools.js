@@ -437,5 +437,18 @@ export function createTools({ logger = console } = {}) {
         return call('locate', args, { timeoutMs: 30_000 })
       },
     }),
+    makeTool({
+      name: 'zotero_wps_fix',
+      description: '一键修复 WPS 文字（WPS Writer）里的 Zotero 引用加载项——给 WPS 装上与 Word 版同款的「Zotero」选项卡（添加/编辑引文、添加/编辑书目、文档首选项、刷新等）。用户说 WPS 里没有 Zotero 选项卡、点按钮提示无法连接 Zotero、想在没有 VBA 的个人版 WPS 里插引文，或让你在 WPS 里插参考文献时调用，无需先向用户确认。action=fix（默认）检测并修复：安装/更新加载项文件、重写 WPS 的加载项登记；状态已正常时不改动任何文件。修复后用户只需两步：完全退出并重开 WPS；WPS 首次（或升级后首次）弹「加载项…是否信任 / 是否继续加载」时点「确定」。把返回的 message 与 nextSteps 原样转告用户；修不好时如实念出 issues，不要自己编原因。action=status 只查看状态，action=uninstall 卸载。',
+      properties: {
+        action: { type: 'string', enum: ['fix', 'status', 'uninstall'], description: '默认 fix：检测并修复；status：只看状态不改动；uninstall：卸载' },
+      },
+      timeoutMs: 120_000,
+      async execute(args) {
+        const action = args.action ?? 'fix'
+        const op = action === 'status' ? 'wps.status' : action === 'uninstall' ? 'wps.uninstall' : 'wps.fix'
+        return call(op, {}, { timeoutMs: 120_000 })
+      },
+    }),
   ]
 }

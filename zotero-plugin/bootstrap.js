@@ -7,6 +7,7 @@
  */
 
 var chromeHandle;
+var e2eLoaded = false;
 
 function install(data, reason) {}
 
@@ -44,12 +45,20 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
 		'content/scripts/refetch.js',
 		'content/scripts/sessionWindow.js',
 		'content/scripts/update.js',
+		'content/scripts/wps.js',
 		'content/scripts/index.js',
 	];
 	for (const script of scripts) {
 		Services.scriptloader.loadSubScript(`chrome://dsh-in-zotero/${script}`, ctx);
 	}
+	// End-to-end test hook (tests/e2e): loaded only when Zotero itself was
+	// launched with DSH_IN_ZOTERO_E2E=1 in its environment. Never in normal use.
+	e2eLoaded = Services.env.get('DSH_IN_ZOTERO_E2E') === '1';
+	if (e2eLoaded) {
+		Services.scriptloader.loadSubScript('chrome://dsh-in-zotero/content/scripts/e2e.js', ctx);
+	}
 	Zotero.DSHinZotero.hooks.onStartup();
+	if (e2eLoaded) Zotero.DSHinZotero.hooks.onE2E();
 }
 
 async function onMainWindowLoad({ window }, reason) {
@@ -78,6 +87,7 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 
 	for (const script of [
 		'content/scripts/index.js',
+		'content/scripts/wps.js',
 		'content/scripts/update.js',
 		'content/scripts/sessionWindow.js',
 		'content/scripts/refetch.js',
@@ -87,6 +97,11 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 		'content/scripts/util.js',
 	]) {
 		Services.scriptloader.unload(`chrome://dsh-in-zotero/${script}`);
+	}
+	if (e2eLoaded) {
+		try { Services.scriptloader.unload('chrome://dsh-in-zotero/content/scripts/e2e.js'); }
+		catch (e) { /* already gone */ }
+		e2eLoaded = false;
 	}
 
 	if (chromeHandle) {

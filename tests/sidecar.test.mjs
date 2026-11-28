@@ -180,7 +180,13 @@ async function main() {
 	catch (error) {
 		threw = error
 	}
-	check('tool zotero_item missing id → coded error', threw !== null && /no-item/.test(threw.message), threw?.message?.slice(0, 60))
+		check('tool zotero_item missing id → coded error', threw !== null && /no-item/.test(threw.message), threw?.message?.slice(0, 60))
+
+		const wpsStatusTool = await byName.get('zotero_wps_fix').execute({ action: 'status' })
+		check('tool zotero_wps_fix (status)', wpsStatusTool.ok === true && wpsStatusTool.healthy === true && Array.isArray(wpsStatusTool.issues))
+		const wpsFixTool = await byName.get('zotero_wps_fix').execute({})
+		check('tool zotero_wps_fix (default = fix, no-op when healthy)', wpsFixTool.ok === true && wpsFixTool.changed === false
+			&& wpsFixTool.nextSteps?.length > 0 && mock.calls().some(call => call.op === 'wps.fix'))
 
 	const lookupTool = await byName.get('zotero_lookup').execute({ identifier: '10.1038/nature15714' })
 	check('tool zotero_lookup resolves a real DOI (online)', lookupTool.ok === true && lookupTool.found === true

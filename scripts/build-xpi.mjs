@@ -52,6 +52,33 @@ if (missing.length || extra.length) {
 	].join('\n'))
 }
 
+// Same discipline for the WPS add-in: wps.js (the installer) lists the files
+// it copies out of content/wps-addon/. js/config.js is the one exception — it
+// is generated at install time (it carries the pairing token).
+const ADDON_DIR = path.join(PLUGIN, 'content', 'wps-addon')
+const wpsSource = fs.readFileSync(path.join(PLUGIN, 'content', 'scripts', 'wps.js'), 'utf8')
+const addonMatch = /const ADDON_FILES = \[([\s\S]*?)\];/.exec(wpsSource)
+if (!addonMatch) throw new Error('cannot read ADDON_FILES from wps.js')
+const addonManifest = [...addonMatch[1].matchAll(/'([^']+)'/g)].map(m => m[1])
+const addonOnDisk = (() => {
+	const walk = (dir, prefix = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+		if (entry.isDirectory()) return walk(path.join(dir, entry.name), rel)
+		return [rel]
+	})
+	return walk(ADDON_DIR).sort()
+})()
+const addonExpected = [...addonManifest, 'js/config.js'].sort()
+if (JSON.stringify(addonOnDisk) !== JSON.stringify(addonExpected)) {
+	const addonMissing = addonExpected.filter(rel => !addonOnDisk.includes(rel))
+	const addonExtra = addonOnDisk.filter(rel => !addonExpected.includes(rel))
+	throw new Error([
+		'ADDON_FILES (wps.js) and content/wps-addon/ contents diverge:',
+		...(addonMissing.length ? [`  missing from wps-addon/: ${addonMissing.join(', ')}`] : []),
+		...(addonExtra.length ? [`  not in ADDON_FILES: ${addonExtra.join(', ')}`] : []),
+	].join('\n'))
+}
+
 // Copy the dsh-plugin payload into zotero-plugin/dsh-plugin/ (excluded from
 // chrome registration; fetched by the sidecar via rootURI at runtime).
 const target = path.join(PLUGIN, 'dsh-plugin')

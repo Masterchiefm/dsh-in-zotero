@@ -181,27 +181,64 @@ DSH.UI = (() => {
  * start the listener through Zotero.Server.init() — the exact call startup
  * makes when the pref is on, and idempotent. Resolves to the listening port,
  * or null when the bind failed. Toasts the outcome (also the debug path's
- * visible feedback). */
+ * visible feedback).
+ *
+ * Zotero.Server.init() swallows bind errors (it just leaves the server off),
+ * and the default port 23119 is commonly squatted by other Zotero-aware tools
+ * that start before Zotero does — so when the preferred port fails, try the
+ * rest of Zotero's official port range (23119–23131): the Connector and the
+ * WPS add-in both probe it. The pref itself is left alone, so Zotero goes back
+ * to its default port as soon as it is free again. */
+const HTTP_PORT_RANGE = Array.from({ length: 13 }, (_, i) => 23119 + i);
+
 async function enableHttpServer() {
 	try {
 		Zotero.Prefs.set('httpServer.enabled', true);
-		await Zotero.Server.init();
 	}
 	catch (e) {
-		DSH.Util.log('Zotero.Server.init failed', e?.message ?? e);
+		DSH.Util.log('httpServer.enabled pref set failed', e?.message ?? e);
 	}
-	const port = DSH.Util.httpServerPort();
-	if (port != null) DSH.Util.toast('DSH', `已启用 Zotero 本地通信服务（端口 ${port}），AI 功能现在可用`);
-	else DSH.Util.toast('DSH', '启用未生效（端口可能被占用），请重启 Zotero 后重试');
-	return port;
+	const preferred = Number(Zotero.Prefs.get('httpServer.port')) || 23119;
+	let usedPort = null;
+	for (const port of [preferred, ...HTTP_PORT_RANGE.filter((p) => p !== preferred)]) {
+		try {
+			await Zotero.Server.init(port);
+		}
+		catch (e) {
+			DSH.Util.log(`Zotero.Server.init(${port}) failed`, e?.message ?? e);
+		}
+		if (DSH.Util.httpServerPort() != null) {
+			usedPort = port;
+			break;
+		}
+	}
+	if (usedPort != null) {
+		DSH.Util.toast('DSH', usedPort === preferred
+			? `已启用 Zotero 本地通信服务（端口 ${usedPort}），AI 功能现在可用`
+			: `已启用 Zotero 本地通信服务：默认端口 ${preferred} 被其他程序占用，已改用端口 ${usedPort}（AI 功能现在可用）`);
+	}
+	else {
+		DSH.Util.toast('DSH', '启用未生效（端口可能被占用），请重启 Zotero 后重试');
+	}
+	return usedPort;
 }
 
 /** Startup check: when the HTTP server is not listening, explain what breaks
  * and offer one-click enable. Runs once per session from onStartup (delayed
- * so it never fights boot); 「不再提示」 persists suppressHttpServerPrompt. */
+ * so it never fights boot); 「不再提示」 persists suppressHttpServerPrompt.
+ *
+ * If the pref is ON but nothing is listening, the user never turned the server
+ * off — Zotero just failed to bind its port at startup (another program
+ * squatting 23119). That is repaired silently here instead of being reported
+ * as "未开启", and never shows a prompt. */
 async function checkHttpServerPrereq() {
 	try {
 		if (DSH.Util.httpServerPort() != null) return; // listening — nothing to do
+		if (Zotero.Prefs.get('httpServer.enabled')) {
+			DSH.Util.log('http server pref is on but nothing is listening (port taken?) — starting it');
+			await enableHttpServer();
+			return;
+		}
 		if (DSH.Util.prefGet('suppressHttpServerPrompt', false)) return;
 		const win = Zotero.getMainWindow();
 		if (!win || typeof Services.prompt?.confirmEx !== 'function') {
@@ -332,6 +369,18 @@ Zotero.DSHinZotero = {
 	enableHttpServer() {
 		return enableHttpServer();
 	},
+	/** WPS 文字引用加载项的状态（settings pane's「WPS 文字引用」section）。 */
+	wpsStatus() {
+		return DSH.WPS.status();
+	},
+	/** 一键修复：安装/更新加载项文件、重写登记；内容已正确时不动任何文件。 */
+	wpsFix() {
+		return DSH.WPS.install();
+	},
+	/** 卸载 WPS 文字引用加载项。 */
+	wpsUninstall() {
+		return DSH.WPS.uninstall();
+	},
 	hooks: {
 		onStartup() {
 			DSH.Util.log('starting', ctx.VERSION);
@@ -343,6 +392,15 @@ Zotero.DSHinZotero = {
 			}
 			catch (e) {
 				DSH.Util.log('bridge register failed', e);
+			}
+
+			// WPS add-in bridge (CORS-enabled relay into Zotero's integration
+			// endpoints). Independent of the sidecar: it works with plain Zotero.
+			try {
+				DSH.WPS.register();
+			}
+			catch (e) {
+				DSH.Util.log('wps bridge register failed', e);
 			}
 
 			// Prerequisite: Zotero's HTTP server must be on for the tools to
@@ -436,6 +494,12 @@ Zotero.DSHinZotero = {
 			})();
 		},
 
+		/** Called by bootstrap.js only in e2e mode (DSH_IN_ZOTERO_E2E=1). */
+		onE2E() {
+			try { DSH.E2E.register(); }
+			catch (e) { DSH.Util.log('e2e hook register failed', e); }
+		},
+
 		onMainWindowLoad(win) {
 			try {
 				DSH.UI.ensureToolbarButton(win);
@@ -485,6 +549,8 @@ Zotero.DSHinZotero = {
 		onShutdown() {
 			try { DSH.Sidecar.stop(); } catch (e) { /* best effort */ }
 			try { DSH.Bridge.unregister(); } catch (e) { /* best effort */ }
+			try { DSH.WPS.unregister(); } catch (e) { /* best effort */ }
+			try { DSH.E2E?.unregister(); } catch (e) { /* only present in e2e mode */ }
 			try { Zotero.Reader.unregisterEventListener?.('renderToolbar', DSH.UI.onRenderToolbar); } catch (e) { /* best effort */ }
 			try { Zotero.Notifier.unregisterObserver('dsh-in-zotero-tabs'); } catch (e) { /* best effort */ }
 			// Tear down the session surface (tab first: its onClose swaps the

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WPS 文字功能区：与 Word 版 Zotero 选项卡对应的「Zotero」选项卡。
+     onAction 统一走 js/ribbon.js 的 OnAction（按按钮 id 分发到 Zotero 集成命令）。 -->
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnAddinLoad">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="zoteroWpsTab" label="Zotero" keytip="Z">
+        <group id="zoteroWpsCiteGroup" label="引文与笔记">
+          <button id="btnAddEditCitation" label="添加/编辑引文" onAction="OnAction" getImage="GetImage" size="large" supertip="在光标处插入一条引文；光标已在引文里时编辑它（引文选择窗口由 Zotero 弹出）。" keytip="C"/>
+          <button id="btnAddNote" label="插入笔记" onAction="OnAction" getImage="GetImage" size="large" supertip="把 Zotero 文库里的一条笔记插入到光标处；笔记里的引文会一并变成引文域。" keytip="N"/>
+          <button id="btnAddAnnotation" label="插入批注" onAction="OnAction" getImage="GetImage" size="large" supertip="选择文献的 PDF 批注（高亮/注释），整理成一条笔记插入到光标处。" keytip="A"/>
+        </group>
+        <group id="zoteroWpsBibGroup" label="参考文献表">
+          <button id="btnAddEditBibliography" label="添加/编辑书目" onAction="OnAction" getImage="GetImage" size="large" supertip="在光标处插入参考文献表；已有参考文献表时重新生成它。" keytip="B"/>
+          <button id="btnDocPrefs" label="文档首选项" onAction="OnAction" getImage="GetImage" supertip="设置本文档使用的引文样式、语言，以及引文放正文还是脚注/尾注。" keytip="P"/>
+          <button id="btnRefresh" label="刷新" onAction="OnAction" getImage="GetImage" supertip="按文库里的最新数据和所选样式，更新全文的引文和参考文献表。" keytip="R"/>
+          <button id="btnUnlink" label="取消引文链接" onAction="OnAction" getImage="GetImage" supertip="移除全文的引文域代码，之后这份文档不再与 Zotero 关联（不可撤销）。" keytip="U"/>
+        </group>
+        <group id="zoteroWpsAboutGroup" label="关于">
+          <button id="btnAbout" label="关于" onAction="OnAction" getImage="GetImage" size="large" supertip="Zotero 引用（WPS 文字版）的版本与修复入口。" keytip="H"/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

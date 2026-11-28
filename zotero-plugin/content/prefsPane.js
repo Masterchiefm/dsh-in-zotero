@@ -495,6 +495,74 @@
 		void fill();
 	}
 
+	/** The WPS section: status line, the one-click repair button and uninstall.
+	 * All work happens in the main sandbox (DSH.WPS); this side only paints the
+	 * outcome. Repair is idempotent — a healthy install leaves files untouched,
+	 * so WPS never re-asks its "add-in was modified" confirmation. */
+	function wireWps(doc) {
+		const btn = doc.getElementById('dsh-wps-fix');
+		if (!btn || doc.getElementById('dsh-wps-wired')) return;
+		const marker = doc.getElementById('dsh-wps-wired') || doc.createElementNS('http://www.w3.org/1999/xhtml', 'span');
+		marker.id = 'dsh-wps-wired';
+		marker.style.display = 'none';
+		if (!marker.parentNode) (btn.parentNode || doc.documentElement).appendChild(marker);
+		const api = () => window.Zotero?.DSHinZotero;
+		const statusEl = doc.getElementById('dsh-wps-status');
+		const resultEl = doc.getElementById('dsh-wps-result');
+		const uninstallBtn = doc.getElementById('dsh-wps-uninstall');
+		const showResult = (text) => {
+			if (!resultEl) return;
+			resultEl.hidden = !text;
+			resultEl.textContent = text ?? '';
+		};
+		const refresh = async () => {
+			if (typeof api()?.wpsStatus !== 'function') return;
+			try {
+				const s = await Promise.resolve(api().wpsStatus());
+				if (statusEl) {
+					statusEl.textContent = !s?.wps
+						? '没有检测到 WPS 文字。安装 WPS（https://www.wps.cn）后再点「一键修复」。'
+						: s.healthy
+							? `状态正常：WPS ${s.wps.version || ''}，加载项 v${s.addon?.version ?? ''}。`
+							: `需要修复：${(s.issues ?? []).join('；')}。`;
+				}
+				if (uninstallBtn) uninstallBtn.disabled = !s?.installed;
+			}
+			catch (e) {
+				if (statusEl) statusEl.textContent = `状态检测失败：${e?.message ?? e}`;
+			}
+		};
+		btn.addEventListener('command', async () => {
+			if (typeof api()?.wpsFix !== 'function' || btn.disabled) return;
+			btn.disabled = true;
+			const prevLabel = btn.label;
+			btn.label = '正在修复…';
+			try {
+				const r = await Promise.resolve(api().wpsFix());
+				showResult([r?.message, ...(r?.nextSteps ?? [])].filter(Boolean).join('\n'));
+			}
+			catch (e) {
+				showResult(`修复失败：${e?.message ?? e}`);
+			}
+			finally {
+				btn.disabled = false;
+				btn.label = prevLabel;
+			}
+			await refresh();
+		});
+		uninstallBtn?.addEventListener('command', () => {
+			if (typeof api()?.wpsUninstall !== 'function' || uninstallBtn.disabled) return;
+			const ok = Services.prompt.confirm(window, '卸载 WPS 引用加载项',
+				'将移除为 WPS 文字安装的 Zotero 引用加载项（「Zotero」选项卡）。\n\n文档里已经插入的引文不受影响。继续？');
+			if (!ok) return;
+			void Promise.resolve(api().wpsUninstall())
+				.then((r) => { showResult(r?.message ?? '已卸载。重启 WPS 后「Zotero」选项卡消失。'); })
+				.catch((e) => showResult(`卸载失败：${e?.message ?? e}`))
+				.finally(() => refresh());
+		});
+		void refresh();
+	}
+
 	function wire(doc) {
 		const menu = doc.getElementById('dsh-mode-menu');
 		if (!menu || doc.getElementById('dsh-pane-wired')) return;
@@ -566,6 +634,7 @@
 		fillCleanup(doc);
 		wireWish(doc);
 		wireUpdate(doc);
+		wireWps(doc);
 	}
 
 	if (document.readyState === 'loading') {
